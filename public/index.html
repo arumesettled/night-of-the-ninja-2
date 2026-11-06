@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Night of the Ninja — Online</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Night of the Ninja</h1>
+      <p class="subtitle">Ninja-fast social deduction — play with your team online</p>
+    </header>
+
+    <div id="lobby" class="screen">
+      <div class="card">
+        <h2>Join or Create a Game</h2>
+        <input id="playerName" placeholder="Your name" maxlength="20">
+        <div class="row">
+          <button id="createBtn">Create Room</button>
+          <input id="roomCode" placeholder="Room code" maxlength="5" style="text-transform:uppercase">
+          <button id="joinBtn">Join Room</button>
+        </div>
+        <div id="lobbyInfo"></div>
+        <ul id="playerList"></ul>
+        <button id="startBtn" style="display:none">Start Game (Host)</button>
+      </div>
+    </div>
+
+    <div id="game" class="screen" style="display:none">
+      <div class="top-bar">
+        <span id="phaseLabel">Phase: —</span>
+        <span id="roomDisplay"></span>
+      </div>
+      <div class="main-area">
+        <div class="players-panel" id="playersPanel"></div>
+        <div class="action-panel">
+          <div id="privateInfo">
+            <h3>Your House</h3>
+            <div id="houseDisplay">—</div>
+            <h3>Your Cards</h3>
+            <div id="handDisplay"></div>
+          </div>
+          <div id="actionArea"></div>
+          <div id="log"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
