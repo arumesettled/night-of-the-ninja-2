@@ -106,12 +106,124 @@ function drawToken(room) {
 function ask(room, pid, prompt) {
   const p = P(room, pid);
   const def = prompt.default !== undefined ? prompt.default : (prompt.options && prompt.options.length ? prompt.options[prompt.options.length - 1].value : null);
+  const { ai, ...pub } = prompt; // `ai` hints are for computer players only, never sent to clients
+  if (p && p.bot) {
+    const delay = prompt.kind === 'draft' ? 500 + Math.random() * 1000 : 900 + Math.random() * 1300;
+    return new Promise((resolve) => setTimeout(() => {
+      let v;
+      try { v = botDecide(room, pid, prompt); } catch (e) { console.error('Bot error', e); v = def; }
+      const opts = prompt.options || [];
+      if (opts.length && !opts.some(o => o.value === v)) v = def;
+      resolve(v);
+    }, delay));
+  }
   if (!p || !p.connected) return Promise.resolve(def);
   return new Promise((resolve) => {
     const id = crypto.randomBytes(6).toString('hex');
-    room.pending[pid] = { id, prompt: { ...prompt, id }, resolve, def };
+    room.pending[pid] = { id, prompt: { ...pub, id }, resolve, def };
     sync(room);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Computer players
+// ---------------------------------------------------------------------------
+const BOT_NAMES = ['Kage', 'Hanzo', 'Tsubaki', 'Raiden', 'Mizuki', 'Kaito', 'Sora', 'Yuki', 'Ren', 'Akane', 'Jin', 'Hoshi'];
+const DRAFT_VALUE = {
+  'Mastermind': 10, 'Mirror Monk': 8, 'Judge': 8, 'Shinobi': 7, 'Blind Assassin': 6, 'Martyr': 5,
+  'Thief': 4, 'Troublemaker': 4, 'Spirit Merchant': 4, 'Spy': 4, 'Mystic': 4, 'Shapeshifter': 3, 'Grave Digger': 3
+};
+const pickRandom = (a) => a[Math.floor(Math.random() * a.length)];
+
+function addBot(room) {
+  const taken = new Set(room.players.map(p => p.name.toLowerCase()));
+  const free = BOT_NAMES.filter(n => !taken.has(n.toLowerCase()));
+  const name = free.length ? pickRandom(free) : `Ninja ${room.players.length + 1}`;
+  room.players.push({ pid: 'bot-' + crypto.randomBytes(6).toString('hex'), sid: null, name, connected: true, bot: true, tokens: [] });
+}
+
+// What a bot has seen of each player's house this round
+function learn(room, viewer, target) {
+  const g = room.game;
+  const p = P(room, viewer);
+  if (!g || !p || !p.bot) return;
+  (g.seen[viewer] = g.seen[viewer] || {})[target] = { ...g.houses[target] };
+}
+function botKnows(room, me, t) {
+  const g = room.game;
+  if (g.revealed[t]) return g.houses[t];
+  return (g.seen[me] || {})[t] || null;
+}
+function botRelation(room, me, t) {
+  const h = botKnows(room, me, t);
+  if (!h) return 'unknown';
+  const mine = room.game.knownHouse[me];
+  if (mine.house === 'Ronin' || h.house === 'Ronin' || h.house !== mine.house) return 'enemy';
+  return 'ally';
+}
+function botPickTarget(room, me, opts, goal) {
+  const players = opts.filter(o => P(room, o.value));
+  if (!players.length) return opts.length ? opts[opts.length - 1].value : null;
+  const rel = (o) => botRelation(room, me, o.value);
+  const rankOf = (o) => { const h = botKnows(room, me, o.value); return h ? (h.rank || 0) : 99; };
+  const enemies = players.filter(o => rel(o) === 'enemy').sort((a, b) => rankOf(a) - rankOf(b));
+  const unknown = players.filter(o => rel(o) === 'unknown');
+  const allies = players.filter(o => rel(o) === 'ally').sort((a, b) => rankOf(b) - rankOf(a));
+  if (goal === 'kill') return (enemies[0] || pickRandom(unknown.length ? unknown : allies)).value;
+  if (goal === 'shinobi') return (enemies[0] || (unknown.length ? pickRandom(unknown) : allies[0])).value;
+  // information: look at someone we know nothing about
+  return pickRandom(unknown.length ? unknown : players).value;
+}
+
+function botDecide(room, me, prompt) {
+  const g = room.game;
+  const opts = prompt.options || [];
+  const ai = prompt.ai || {};
+  switch (prompt.kind) {
+    case 'draft': {
+      const cards = ai.cards || [];
+      const scored = cards.map(c => ({ c, s: (DRAFT_VALUE[c.type] || 3) + Math.random() * 2.5 }));
+      scored.sort((a, b) => b.s - a.s);
+      return scored.length ? scored[0].c.id : prompt.default;
+    }
+    case 'declare':
+      if (Math.random() < 0.1) return 'pass';
+      return opts.some(o => o.value === 'all') ? 'all' : opts[0].value;
+    case 'react':
+      if (opts.some(o => o.value === 'Mirror Monk')) return 'Mirror Monk';
+      if (opts.some(o => o.value === 'Martyr')) return 'Martyr';
+      return 'none';
+    case 'target':
+      if (ai.goal === 'steal') {
+        const rich = opts.filter(o => o.value !== 'none').sort((a, b) => P(room, b.value).tokens.length - P(room, a.value).tokens.length);
+        return rich.length ? rich[0].value : 'none';
+      }
+      return botPickTarget(room, me, opts, ai.goal);
+    case 'choice':
+      switch (ai.goal) {
+        case 'shinobiKill': return botRelation(room, me, ai.target) === 'ally' ? 'spare' : 'kill';
+        case 'expose': return botRelation(room, me, ai.target) === 'enemy' ? 'reveal' : 'hide';
+        case 'swapHouses': return Math.random() < 0.35 ? 'swap' : 'keep';
+        case 'merchantLook': return 'house';
+        case 'merchantGive': {
+          const mine = P(room, me).tokens;
+          if (!mine.length) return 'none';
+          const lo = Math.min(...mine);
+          return lo <= 2 ? `m${mine.indexOf(lo)}` : 'none';
+        }
+        case 'merchantTake': {
+          const theirs = P(room, ai.target).tokens;
+          return `t${theirs.indexOf(Math.max(...theirs))}`;
+        }
+        case 'digPick': {
+          const cards = (ai.cards || []).slice().sort((a, b) => (DRAFT_VALUE[b.type] || 0) - (DRAFT_VALUE[a.type] || 0));
+          return cards.length ? String(cards[0].id) : opts[0].value;
+        }
+        case 'digUse': return 'now';
+      }
+      return prompt.default !== undefined ? prompt.default : (opts[0] && opts[0].value);
+  }
+  return prompt.default;
 }
 
 function answer(room, pid, promptId, value) {
@@ -153,6 +265,7 @@ function stateFor(room, pid) {
       pid: p.pid,
       name: p.name,
       connected: p.connected,
+      bot: !!p.bot,
       alive: g ? !g.dead[p.pid] : true,
       tokenCount: p.tokens.length,
       points: room.state === 'gameOver' || p.pid === pid ? points(p) : null,
@@ -198,7 +311,7 @@ async function playRound(room) {
     stage: 'draft',
     phaseLabel: 'Draft',
     houses: {}, knownHouse: {}, hands: {}, draftView: {},
-    discard: [], played: [], dead: {}, revealed: {}, notes: {}, log: [],
+    discard: [], played: [], dead: {}, revealed: {}, notes: {}, log: [], seen: {},
     waiting: '', result: null
   };
   players.forEach((p, i) => {
@@ -220,7 +333,8 @@ async function playRound(room) {
         title: pickLabel,
         text: 'Choose a card to keep.',
         options: packs[p.pid].map(c => ({ value: c.id, label: cardName(c) })),
-        default: packs[p.pid][0].id
+        default: packs[p.pid][0].id,
+        ai: { cards: packs[p.pid] }
       });
       const idx = Math.max(0, packs[p.pid].findIndex(c => c.id === v));
       const kept = packs[p.pid].splice(idx, 1)[0];
@@ -302,12 +416,14 @@ async function resolveCard(room, pid, card) {
   switch (card.type) {
     case 'Spy': {
       const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      learn(room, pid, t);
       log(room, `${me} spies on ${nameOf(room, t)}'s house.`);
       note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}.`);
       break;
     }
     case 'Mystic': {
       const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      learn(room, pid, t);
       log(room, `${me} reads ${nameOf(room, t)}'s house and a ninja card.`);
       const held = g.hands[t];
       const seen = held.length ? held[Math.floor(Math.random() * held.length)] : null;
@@ -320,23 +436,26 @@ async function resolveCard(room, pid, card) {
       const swap = await ask(room, pid, {
         kind: 'choice', title: cardName(card),
         text: `${nameOf(room, a)} is ${houseLabel(g.houses[a])}. ${nameOf(room, b)} is ${houseLabel(g.houses[b])}. Swap their houses? They won't know.`,
-        options: [{ value: 'swap', label: 'Swap them' }, { value: 'keep', label: 'Leave them' }], default: 'keep'
+        options: [{ value: 'swap', label: 'Swap them' }, { value: 'keep', label: 'Leave them' }], default: 'keep',
+        ai: { goal: 'swapHouses' }
       });
       note(room, pid, `${cardName(card)}: ${nameOf(room, a)} was ${houseLabel(g.houses[a])}, ${nameOf(room, b)} was ${houseLabel(g.houses[b])}.${swap === 'swap' ? ' You swapped them.' : ''}`);
       if (swap === 'swap') { const tmp = g.houses[a]; g.houses[a] = g.houses[b]; g.houses[b] = tmp; }
+      learn(room, pid, a); learn(room, pid, b);
       log(room, `${me} looks at ${nameOf(room, a)} and ${nameOf(room, b)}'s houses…`);
       break;
     }
     case 'Grave Digger': {
       if (g.discard.length === 0) { log(room, `${me} digs, but the discard pile is empty.`); break; }
       const offered = shuffle(g.discard.slice()).slice(0, 2);
-      const pick = await ask(room, pid, { kind: 'choice', title: cardName(card), text: 'Pick one discarded card.', options: offered.map(c => ({ value: String(c.id), label: cardName(c) })), default: String(offered[0].id) });
+      const pick = await ask(room, pid, { kind: 'choice', title: cardName(card), text: 'Pick one discarded card.', options: offered.map(c => ({ value: String(c.id), label: cardName(c) })), default: String(offered[0].id), ai: { goal: 'digPick', cards: offered } });
       const dug = offered.find(c => String(c.id) === pick) || offered[0];
       g.discard = g.discard.filter(c => c.id !== dug.id);
       const usable = !['React', 'Reveal'].includes(dug.cls);
       const how = usable ? await ask(room, pid, {
         kind: 'choice', title: cardName(card), text: `You dug up ${cardName(dug)}. Use it now, or keep it for its own phase?`,
-        options: [{ value: 'now', label: 'Use it now' }, { value: 'keep', label: 'Keep it for later' }], default: 'keep'
+        options: [{ value: 'now', label: 'Use it now' }, { value: 'keep', label: 'Keep it for later' }], default: 'keep',
+        ai: { goal: 'digUse' }
       }) : 'keep';
       if (how === 'now') {
         log(room, `${me} digs up ${cardName(dug)} and uses it immediately!`);
@@ -353,9 +472,11 @@ async function resolveCard(room, pid, card) {
     }
     case 'Troublemaker': {
       const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      learn(room, pid, t);
       const rev = await ask(room, pid, {
         kind: 'choice', title: cardName(card), text: `${nameOf(room, t)} is ${houseLabel(g.houses[t])}. Reveal it to everyone?`,
-        options: [{ value: 'reveal', label: 'Reveal it' }, { value: 'hide', label: 'Keep it secret' }], default: 'hide'
+        options: [{ value: 'reveal', label: 'Reveal it' }, { value: 'hide', label: 'Keep it secret' }], default: 'hide',
+        ai: { goal: 'expose', target: t }
       });
       note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}.`);
       if (rev === 'reveal') { g.revealed[t] = true; log(room, `${me} exposes ${nameOf(room, t)}: ${houseLabel(g.houses[t])}!`); }
@@ -367,22 +488,26 @@ async function resolveCard(room, pid, card) {
       const tp = P(room, t), mp = P(room, pid);
       const look = await ask(room, pid, {
         kind: 'choice', title: cardName(card), text: `Look at ${tp.name}'s honor tokens or house card?`,
-        options: [{ value: 'tokens', label: 'Honor tokens' }, { value: 'house', label: 'House card' }], default: 'house'
+        options: [{ value: 'tokens', label: 'Honor tokens' }, { value: 'house', label: 'House card' }], default: 'house',
+        ai: { goal: 'merchantLook' }
       });
+      if (look === 'house') learn(room, pid, t);
       if (look === 'house') note(room, pid, `${cardName(card)}: ${tp.name} is ${houseLabel(g.houses[t])}.`);
       else note(room, pid, `${cardName(card)}: ${tp.name}'s tokens are ${tp.tokens.length ? tp.tokens.join(', ') : 'none'}.`);
       log(room, `${me} bargains with ${tp.name}…`);
       if (tp.tokens.length && mp.tokens.length) {
         const mine = await ask(room, pid, {
           kind: 'choice', title: cardName(card), text: 'Swap one honor token? Choose one of yours to give.',
-          options: [...mp.tokens.map((v, i) => ({ value: `m${i}`, label: `Give my ${v}` })), { value: 'none', label: "Don't swap" }], default: 'none'
+          options: [...mp.tokens.map((v, i) => ({ value: `m${i}`, label: `Give my ${v}` })), { value: 'none', label: "Don't swap" }], default: 'none',
+          ai: { goal: 'merchantGive' }
         });
         if (mine !== 'none') {
           let ti = Math.floor(Math.random() * tp.tokens.length);
           if (look === 'tokens') {
             const theirs = await ask(room, pid, {
               kind: 'choice', title: cardName(card), text: `Which of ${tp.name}'s tokens do you take?`,
-              options: tp.tokens.map((v, i) => ({ value: `t${i}`, label: `Take their ${v}` })), default: 't0'
+              options: tp.tokens.map((v, i) => ({ value: `t${i}`, label: `Take their ${v}` })), default: 't0',
+              ai: { goal: 'merchantTake', target: t }
             });
             ti = Number(theirs.slice(1));
           }
@@ -404,7 +529,8 @@ async function resolveCard(room, pid, card) {
       if (!richer.length) { log(room, `No one has more honor than ${me}, so there is nothing to steal.`); break; }
       const t = await ask(room, pid, {
         kind: 'target', title: cardName(card), text: 'Take one honor token from a player with more tokens than you?',
-        options: [...richer.map(p => ({ value: p.pid, label: `${p.name} (${p.tokens.length} tokens)` })), { value: 'none', label: "Don't steal" }], default: 'none'
+        options: [...richer.map(p => ({ value: p.pid, label: `${p.name} (${p.tokens.length} tokens)` })), { value: 'none', label: "Don't steal" }], default: 'none',
+        ai: { goal: 'steal' }
       });
       if (t !== 'none') {
         const tp = P(room, t);
@@ -419,21 +545,23 @@ async function resolveCard(room, pid, card) {
     case 'Judge': {
       g.revealed[pid] = true;
       log(room, `${me} reveals their house: ${houseLabel(g.houses[pid])}.`);
-      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL. No reaction can stop the Judge.', options: playerOptions(room, otherAlive(room, pid)) });
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL. No reaction can stop the Judge.', options: playerOptions(room, otherAlive(room, pid)), ai: { goal: 'kill' } });
       if (t) await attemptKill(room, pid, t, card, false);
       break;
     }
     case 'Blind Assassin': {
-      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL.', options: playerOptions(room, otherAlive(room, pid)) });
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL.', options: playerOptions(room, otherAlive(room, pid)), ai: { goal: 'kill' } });
       if (t) await attemptKill(room, pid, t, card, true);
       break;
     }
     case 'Shinobi': {
-      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player and look at their house.', options: playerOptions(room, otherAlive(room, pid)) });
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player and look at their house.', options: playerOptions(room, otherAlive(room, pid)), ai: { goal: 'shinobi' } });
       if (!t) break;
+      learn(room, pid, t);
       const k = await ask(room, pid, {
         kind: 'choice', title: cardName(card), text: `${nameOf(room, t)} is ${houseLabel(g.houses[t])}. Kill them?`,
-        options: [{ value: 'kill', label: 'Kill them' }, { value: 'spare', label: 'Spare them' }], default: 'spare'
+        options: [{ value: 'kill', label: 'Kill them' }, { value: 'spare', label: 'Spare them' }], default: 'spare',
+        ai: { goal: 'shinobiKill', target: t }
       });
       note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}.`);
       if (k === 'kill') await attemptKill(room, pid, t, card, true);
@@ -586,6 +714,37 @@ io.on('connection', (socket) => {
     bind(room, pid);
   });
 
+  socket.on('playSolo', (playerName) => {
+    const name = String(playerName || '').trim().slice(0, 20);
+    if (!name) return socket.emit('gameError', 'Pick a ninja name first');
+    const code = generateRoomCode();
+    const pid = crypto.randomBytes(8).toString('hex');
+    const room = { code, hostPid: pid, players: [], state: 'lobby', round: 0, game: null, pending: {}, tokenPool: createTokenPool() };
+    room.players.push({ pid, sid: socket.id, name, connected: true, tokens: [] });
+    for (let i = 0; i < 4; i++) addBot(room);
+    rooms.set(code, room);
+    bind(room, pid);
+  });
+
+  socket.on('addBot', () => {
+    if (!bound) return;
+    const { room, pid } = bound;
+    if (room.hostPid !== pid || room.state !== 'lobby') return;
+    if (room.players.length >= MAX_PLAYERS) return socket.emit('gameError', 'Room is full (11 players)');
+    addBot(room);
+    sync(room);
+  });
+
+  socket.on('removeBot', (botPid) => {
+    if (!bound) return;
+    const { room, pid } = bound;
+    if (room.hostPid !== pid || room.state !== 'lobby') return;
+    const b = P(room, botPid);
+    if (!b || !b.bot) return;
+    room.players = room.players.filter(p => p.pid !== botPid);
+    sync(room);
+  });
+
   socket.on('joinRoom', ({ code, playerName }) => {
     const room = rooms.get(String(code || '').toUpperCase());
     const name = String(playerName || '').trim().slice(0, 20);
@@ -644,8 +803,9 @@ io.on('connection', (socket) => {
 
 function removePlayer(room, pid) {
   room.players = room.players.filter(p => p.pid !== pid);
-  if (!room.players.length) return rooms.delete(room.code);
-  if (room.hostPid === pid) room.hostPid = room.players[0].pid;
+  const humans = room.players.filter(p => !p.bot);
+  if (!humans.length) return rooms.delete(room.code);
+  if (room.hostPid === pid) room.hostPid = humans[0].pid;
   sync(room);
 }
 
@@ -654,13 +814,14 @@ function markDisconnected(room, pid) {
   if (!p) return;
   p.connected = false;
   if (room.hostPid === pid) {
-    const next = room.players.find(x => x.connected);
+    const next = room.players.find(x => x.connected && !x.bot);
     if (next) room.hostPid = next.pid;
   }
   // Give a dropped player 45s to come back before their pending choice is made for them
   setTimeout(() => { if (!p.connected) cancelPending(room, pid); }, 45000);
-  if (!room.players.some(x => x.connected)) {
-    setTimeout(() => { if (!room.players.some(x => x.connected)) rooms.delete(room.code); }, 10 * 60 * 1000);
+  const humanOnline = () => room.players.some(x => x.connected && !x.bot);
+  if (!humanOnline()) {
+    setTimeout(() => { if (!humanOnline()) rooms.delete(room.code); }, 10 * 60 * 1000);
   }
   sync(room);
 }
