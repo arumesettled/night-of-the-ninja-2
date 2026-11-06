@@ -84,6 +84,14 @@ createBtn.onclick = () => {
   socket.emit('createRoom', name);
 };
 
+$('soloBtn').onclick = () => {
+  const name = playerNameInput.value.trim();
+  if (!name) { playerNameInput.focus(); return toast('Pick a ninja name first'); }
+  socket.emit('playSolo', name);
+};
+
+$('addBotBtn').onclick = () => socket.emit('addBot');
+
 joinBtn.onclick = () => {
   const name = playerNameInput.value.trim();
   const code = roomCodeInput.value.trim().toUpperCase();
@@ -133,6 +141,7 @@ function tagsFor(p) {
   return [
     p.pid === S.me ? '<span class="tag you">You</span>' : '',
     p.pid === S.hostPid ? '<span class="tag host">Host</span>' : '',
+    p.bot ? '<span class="tag cpu">CPU</span>' : '',
     p.connected === false ? '<span class="tag off">Away</span>' : ''
   ].join('');
 }
@@ -145,7 +154,11 @@ function renderLobby() {
   const isHost = S.hostPid === S.me;
   playerList.innerHTML = S.players.map((p) => `<li>
       <span class="avatar" style="background:${avatarColor(p.pid)}">${initials(p.name)}</span>
-      <span class="pname">${esc(p.name)}</span>${tagsFor(p)}</li>`).join('');
+      <span class="pname">${esc(p.name)}</span>${tagsFor(p)}${isHost && p.bot ? `<button class="remove-bot" data-bot="${esc(p.pid)}" title="Remove ${esc(p.name)}">×</button>` : ''}</li>`).join('');
+  playerList.querySelectorAll('[data-bot]').forEach((b) => { b.onclick = () => socket.emit('removeBot', b.dataset.bot); });
+  $('botControls').hidden = !isHost || S.players.length >= MAX_PLAYERS;
+  const humans = S.players.filter((p) => !p.bot).length;
+  $('lobbyInfo').textContent = humans === 1 && S.players.length > 1 ? 'Playing against the computer. Friends can still join with this code.' : 'Share this code with your team.';
   playerCount.textContent = `${S.players.length} / ${MAX_PLAYERS}`;
   const need = MIN_PLAYERS - S.players.length;
   startBtn.hidden = !isHost;
