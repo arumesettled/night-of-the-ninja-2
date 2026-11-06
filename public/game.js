@@ -141,6 +141,7 @@ socket.on('error', (msg) => toast(typeof msg === 'string' ? msg : 'Something wen
 // ---------- Rendering ----------
 function showLobby(code, players) {
   entryPanel.hidden = true;
+  $('heroPhoto').hidden = true;
   waitingPanel.hidden = false;
   codeText.textContent = code;
   renderPlayerList(players);
