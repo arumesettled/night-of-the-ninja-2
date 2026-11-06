@@ -304,3 +304,144 @@ body.in-game .subtitle { display: none; }
   .private { grid-template-columns: 1fr; }
   .house-col .house-card { max-width: 160px; }
 }
+
+/* ---------- Full game UI ---------- */
+.side { display: grid; gap: 1rem; }
+.phase-track { display: flex; gap: 0.3rem; flex-wrap: wrap; justify-content: center; flex: 1; margin: 0 1rem; }
+.pt { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; padding: 0.25rem 0.55rem; border-radius: 999px; color: var(--ink-faint); border: 1px solid var(--line); }
+.pt.past { color: var(--ink-soft); background: rgba(124, 140, 255, 0.08); }
+.pt.now { color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: 0 0 16px rgba(226, 68, 92, 0.45); }
+.tag.off { background: rgba(107, 115, 150, 0.25); color: var(--ink-soft); }
+.mini-house { flex: none; font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.45rem; border-radius: 6px; color: #fff; background: #39406b; }
+.mini-house.crane { background: var(--crane); }
+.mini-house.lotus { background: var(--lotus); }
+.mini-house.ronin { background: var(--ronin); }
+
+.honor-box { margin-top: 0.8rem; text-align: center; font-size: 0.95rem; }
+.honor-box strong { font-family: 'Cinzel', serif; font-size: 1.5rem; }
+.honor-box .muted { display: block; }
+
+.hand-card { width: 132px; }
+.card-text { font-size: 0.62rem; line-height: 1.3; color: var(--ink-soft); text-align: center; display: none; }
+.hand-col .hand-card, .pick .hand-card { aspect-ratio: auto; min-height: 190px; gap: 0.35rem; }
+.hand-col .card-text, .pick .card-text { display: block; }
+.hand-card.small { width: 84px; padding: 0.4rem; cursor: default; }
+.hand-card.small .card-glyph { font-size: 1.6rem; }
+.hand-card.small .card-num { font-size: 0.85rem; }
+.hand-card.small .card-type { font-size: 0.58rem; }
+.hand-card.small:hover { transform: none; }
+
+.notes-card { padding: 1.1rem; }
+#notes { display: grid; gap: 0.4rem; }
+.note { font-size: 0.85rem; padding: 0.5rem 0.65rem; border-radius: 10px; background: rgba(52, 211, 153, 0.08); border: 1px solid rgba(52, 211, 153, 0.25); }
+
+.action-card { border-color: rgba(226, 68, 92, 0.45); box-shadow: var(--shadow), 0 0 0 1px rgba(226, 68, 92, 0.15), 0 0 40px rgba(226, 68, 92, 0.12); }
+.action-card h2 { font-family: 'Cinzel', serif; font-size: 1.4rem; margin: 0.2rem 0 0.4rem; }
+.action-card p { color: var(--ink-soft); margin-bottom: 0.9rem; }
+.action-card.react { border-color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: var(--shadow), 0 0 0 3px rgba(226, 68, 92, 0.5); } }
+.options { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.pick { margin-top: 0; }
+.pick-card { background: none; border: none; padding: 0; cursor: pointer; }
+.pick-card:disabled { opacity: 0.5; }
+.action-card.waiting-note { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; border-color: var(--line); box-shadow: var(--shadow); }
+.spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(124, 140, 255, 0.3); border-top-color: var(--accent-2); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.result-title { font-size: 1.8rem !important; }
+.scores { display: grid; gap: 0.35rem; margin: 0.6rem 0 1rem; }
+.scores div { display: flex; justify-content: space-between; padding: 0.5rem 0.8rem; border-radius: 10px; background: rgba(5, 7, 15, 0.45); border: 1px solid var(--line); }
+.scores div:first-child { border-color: rgba(52, 211, 153, 0.5); }
+
+.played-list { display: flex; flex-wrap: wrap; gap: 0.8rem; }
+.played { display: grid; justify-items: center; gap: 0.3rem; }
+.played-by { font-size: 0.75rem; color: var(--ink-soft); max-width: 90px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.played.active .hand-card { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.played.fizzled { opacity: 0.4; }
+.played.done { opacity: 0.75; }
+
+@media (max-width: 760px) {
+  .top-bar { flex-wrap: wrap; gap: 0.6rem; }
+  .phase-track { order: 3; margin: 0; justify-content: flex-start; }
+  .hand-card { width: 118px; }
+}
+
+/* ---------- Ninja cards (original design) ---------- */
+.ncard {
+  --hue: #7c8cff;
+  position: relative; width: 150px; min-height: 222px; flex: none;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 0.55rem 0.6rem 0.7rem; border-radius: 14px; overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--hue) 38%, transparent) 0%, transparent 58%),
+    linear-gradient(170deg, color-mix(in srgb, var(--hue) 30%, #10142e) 0%, #0a0d20 62%, #07091a 100%);
+  border: 1px solid color-mix(in srgb, var(--hue) 55%, transparent);
+  box-shadow: 0 12px 26px rgba(0,0,0,0.5), inset 0 0 0 3px rgba(7,9,26,0.85), inset 0 0 0 4px color-mix(in srgb, var(--hue) 30%, transparent);
+  transition: transform .18s, box-shadow .18s;
+}
+.ncard::before { /* fine diagonal texture */
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.07;
+  background: repeating-linear-gradient(135deg, #fff 0 1px, transparent 1px 7px);
+}
+.c-spy { --hue: #2fb39a; }
+.c-mystic { --hue: #5b7cfa; }
+.c-trickster { --hue: #d9468f; }
+.c-assassin { --hue: #e2445c; }
+.c-shinobi { --hue: #8ea6c4; }
+.c-react { --hue: #36c2d9; }
+.c-reveal { --hue: #f08a74; }
+
+.nc-top { width: 100%; display: flex; align-items: center; gap: 0.4rem; position: relative; z-index: 1; }
+.nc-level {
+  width: 28px; height: 28px; flex: none; display: grid; place-items: center;
+  font-family: 'Cinzel', serif; font-weight: 800; font-size: 0.95rem; color: #fff;
+  background: var(--hue); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+.nc-class { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: color-mix(in srgb, var(--hue) 70%, #fff); }
+
+.nc-art { position: relative; width: 96px; height: 96px; margin: 0.35rem 0 0.2rem; display: grid; place-items: center; z-index: 1; }
+.enso { position: absolute; inset: 0; width: 100%; height: 100%; color: color-mix(in srgb, var(--hue) 80%, #fff); opacity: 0.85; transform: rotate(-20deg); }
+.nc-glyph { font-family: 'Shippori Mincho', serif; font-size: 2.7rem; line-height: 1; color: #fff; text-shadow: 0 0 18px color-mix(in srgb, var(--hue) 70%, transparent); }
+
+.nc-name { font-family: 'Cinzel', serif; font-weight: 800; font-size: 0.92rem; letter-spacing: 0.03em; text-align: center; line-height: 1.15; position: relative; z-index: 1; }
+.nc-text {
+  margin-top: 0.35rem; font-size: 0.64rem; line-height: 1.35; color: var(--ink-soft); text-align: center;
+  padding-top: 0.35rem; border-top: 1px solid color-mix(in srgb, var(--hue) 35%, transparent); position: relative; z-index: 1;
+}
+
+.hand .ncard:hover, .pick-card:hover .ncard { transform: translateY(-6px) rotate(-1deg); box-shadow: 0 18px 36px color-mix(in srgb, var(--hue) 35%, transparent), inset 0 0 0 3px rgba(7,9,26,0.85), inset 0 0 0 4px color-mix(in srgb, var(--hue) 40%, transparent); }
+.ncard.small { width: 86px; min-height: 0; padding: 0.4rem 0.4rem 0.5rem; }
+.ncard.small .nc-art { width: 54px; height: 54px; margin: 0.2rem 0 0.1rem; }
+.ncard.small .nc-glyph { font-size: 1.5rem; }
+.ncard.small .nc-level { width: 20px; height: 20px; font-size: 0.7rem; }
+.ncard.small .nc-class, .ncard.small .nc-text { display: none; }
+.ncard.small .nc-name { font-size: 0.62rem; }
+.played.active .ncard { box-shadow: 0 0 0 2px var(--accent), 0 0 24px rgba(226, 68, 92, 0.5); }
+
+/* House card: seal + rank */
+.house-card { min-height: 222px; }
+.house-seal {
+  width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+  font-family: 'Cinzel', serif; font-weight: 800; font-size: 2rem; color: #fff;
+  border: 2px solid rgba(255,255,255,0.75); background: rgba(0,0,0,0.25); box-shadow: 0 0 0 5px rgba(255,255,255,0.08);
+}
+.house-card .house-sigil { font-size: 2.4rem; opacity: 0.9; }
+
+.house-set { margin: 0.9rem 0 0; text-align: center; font-size: 0.85rem; color: var(--ink-soft); }
+
+/* Players panel stays compact with up to 11 ninjas */
+#playersPanel { max-height: 560px; overflow-y: auto; }
+#playersPanel .player-card { padding: 0.5rem 0.65rem; }
+#playersPanel .avatar { width: 30px; height: 30px; font-size: 0.78rem; }
+@media (max-width: 760px) {
+  .ncard { width: 136px; min-height: 206px; }
+  #playersPanel { display: grid; grid-template-columns: 1fr 1fr; max-height: none; }
+  #playersPanel .tag { display: none; }
+}
+#playersPanel .player-card { animation: none; }
+#playersPanel .tag.host { display: none; }
+#playersPanel .pname { min-width: 4.5em; }
+@media (max-width: 760px) {
+  .main-area { display: flex; flex-direction: column; }
+  .side { order: 2; }
+}
