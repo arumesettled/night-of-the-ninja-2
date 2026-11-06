@@ -70,6 +70,24 @@ function cardHTML(c, extra = '') {
     </div>`;
 }
 
+function houseCardHTML(h, showName = true) {
+  const k = String(h.house).toLowerCase();
+  return `<div class="house-card ${k} hc">
+      <span class="house-sigil">${HOUSE_SIGILS[h.house] || '?'}</span>
+      <span class="house-seal">${h.rank ? esc(h.rank) : '—'}</span>
+      <span class="house-name">${h.house === 'Ronin' ? 'Ronin' : 'House ' + esc(h.house)}</span>
+      ${showName && h.name ? `<span class="house-rank">${esc(h.name)}</span>` : ''}
+    </div>`;
+}
+function flipHTML(h, delay = 0, extra = '') {
+  return `<div class="flip ${extra}" style="--d:${delay}ms">
+      <div class="flip-inner">
+        <div class="flip-back"><span>忍</span></div>
+        <div class="flip-front">${houseCardHTML(h)}</div>
+      </div>
+    </div>`;
+}
+
 function houseSetText(n) {
   if (n < 2) return '';
   const pairs = Math.floor(n / 2);
@@ -274,13 +292,33 @@ function renderAction() {
     area.dataset.prompt = pr.id;
     area.hidden = false;
     area.className = `card action-card prompt ${pr.kind}`;
-    const draftCards = pr.kind === 'draft' && S.draftHand ? S.draftHand : null;
-    area.innerHTML = `<span class="eyebrow">${pr.kind === 'react' ? 'Quick, decide!' : 'Your move'}</span>
+    const cards = pr.cards || (pr.kind === 'draft' ? S.draftHand : null);
+    const killing = pr.kind === 'target' && /kill/i.test(pr.text + pr.title);
+    let visual = '';
+    if (pr.houses && pr.houses.length) visual += `<div class="prompt-houses">${pr.houses.map((h, i) => flipHTML(h, i * 250)).join('')}</div>`;
+    if (cards && cards.length) {
+      visual += pr.pick
+        ? `<div class="hand pick">${cards.map((c) => `<button class="pick-card" data-v="${esc(c.id)}">${cardHTML(c)}</button>`).join('')}</div>`
+        : `<div class="hand prompt-cards">${cards.map((c) => cardHTML(c)).join('')}</div>`;
+    }
+    const optionBtn = (o, i) => `<button class="btn ${i === pr.options.length - 1 && pr.options.length > 1 && /hold|don't|spare|leave|keep it secret|accept|pass/i.test(o.label) ? 'btn-secondary' : 'btn-primary'}" data-v="${esc(o.value)}">${esc(o.label)}</button>`;
+    const targetBtn = (o, i) => {
+      const p = S.players.find((x) => x.pid === o.value);
+      if (!p) return optionBtn(o, i);
+      const known = p.house ? `<span class="mini-house ${String(p.houseName).toLowerCase()}">${esc(p.house)}</span>` : '';
+      return `<button class="target-tile ${killing ? 'danger' : ''}" data-v="${esc(o.value)}">
+          <span class="avatar" style="background:${avatarColor(p.pid)}">${initials(p.name)}</span>
+          <span class="pname">${esc(o.label)}</span>${known}${killing ? '<span class="tt-icon">🗡</span>' : ''}
+        </button>`;
+    };
+    const buttons = pr.pick ? '' : pr.kind === 'target'
+      ? `<div class="targets">${pr.options.map(targetBtn).join('')}</div>`
+      : `<div class="options">${pr.options.map(optionBtn).join('')}</div>`;
+    area.innerHTML = `<span class="eyebrow">${pr.kind === 'react' ? 'Quick, decide!' : killing ? 'Choose your target' : 'Your move'}</span>
       <h2>${esc(pr.title)}</h2>
       <p>${esc(pr.text)}</p>
-      ${draftCards
-        ? `<div class="hand pick">${draftCards.map((c) => `<button class="pick-card" data-v="${c.id}">${cardHTML(c)}</button>`).join('')}</div>`
-        : `<div class="options">${pr.options.map((o, i) => `<button class="btn ${i === pr.options.length - 1 && pr.options.length > 1 && /hold|don't|spare|leave|keep it secret|accept|pass/i.test(o.label) ? 'btn-secondary' : 'btn-primary'}" data-v="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div>`}`;
+      ${visual}${buttons}`;
+    area.classList.toggle('killing', killing);
     area.querySelectorAll('[data-v]').forEach((b) => {
       b.onclick = () => {
         const opt = pr.options.find((o) => String(o.value) === b.dataset.v);
@@ -310,4 +348,126 @@ function renderAction() {
 function bindNext() {
   const b = $('nextBtn');
   if (b) b.onclick = () => { b.disabled = true; socket.emit('startGame'); };
+}
+
+
+// ---------- Shared animations ----------
+const fxRoot = $('fx');
+const fxQueue = [];
+let fxBusy = false;
+const PHASE_GLYPH = { 'Spy': '諜', 'Mystic': '霊', 'Trickster': '変', 'Blind Assassin': '刺', 'Shinobi': '忍' };
+
+socket.on('fx', (ev) => { fxQueue.push(ev); if (!fxBusy) nextFx(); });
+
+function nextFx() {
+  const ev = fxQueue.shift();
+  if (!ev) { fxBusy = false; return; }
+  fxBusy = true;
+  const built = buildFx(ev);
+  if (!built) return nextFx();
+  const el = document.createElement('div');
+  el.className = `fx-layer ${built.cls}`;
+  el.innerHTML = built.html;
+  fxRoot.appendChild(el);
+  if (built.shake) { document.body.classList.remove('shake'); void document.body.offsetWidth; document.body.classList.add('shake'); }
+  requestAnimationFrame(() => el.classList.add('in'));
+  const ms = fxQueue.length > 1 ? Math.min(built.ms, 1400) : built.ms; // catch up if events pile up
+  let done = false;
+  const close = () => {
+    if (done) return; done = true;
+    el.classList.add('out');
+    setTimeout(() => { el.remove(); nextFx(); }, 380);
+  };
+  el.addEventListener('click', close);
+  setTimeout(close, ms);
+}
+
+function buildFx(ev) {
+  const meName = (S && S.players.find((p) => p.pid === S.me) || {}).name;
+  switch (ev.type) {
+    case 'phase': {
+      const n = ev.plays.length;
+      return {
+        cls: 'fx-phase', ms: n ? 1700 + 450 * n : 1100,
+        html: `<div class="fx-panel">
+            <span class="fx-kanji">${PHASE_GLYPH[ev.phase] || '夜'}</span>
+            <span class="eyebrow">Night falls</span>
+            <h2 class="fx-title">${esc(ev.phase)} phase</h2>
+            ${n ? `<div class="fx-cards">${ev.plays.map((x, i) => `<div class="fx-dealt" style="--d:${250 + i * 300}ms">${cardHTML(x.card)}<span class="fx-who">${x.pid === S.me ? 'You' : esc(x.name)}</span></div>`).join('')}</div>`
+              : `<p class="fx-sub">No one reveals a ${esc(ev.phase)}.</p>`}
+          </div>`
+      };
+    }
+    case 'kill': {
+      const me = ev.pid === (S && S.me);
+      const how = ev.reflected ? `reflected by ${esc(ev.by)}'s Mirror Monk` : ev.card ? `by ${esc(ev.by)}'s ${esc(cardName(ev.card))}` : '';
+      return {
+        cls: `fx-kill ${me ? 'is-me' : ''}`, ms: 2900, shake: true,
+        html: `<div class="fx-blood"></div><div class="fx-slash"></div><div class="fx-slash two"></div>
+          <div class="fx-panel">
+            <span class="fx-kanji kill">死</span>
+            <h2 class="fx-title">${me ? 'You have been killed' : esc(ev.name)}</h2>
+            <p class="fx-sub">${me ? how : 'has been killed ' + how}</p>
+          </div>`
+      };
+    }
+    case 'react':
+      return {
+        cls: `fx-react ${ev.react === 'Martyr' ? 'martyr' : 'mirror'}`, ms: 2200, shake: ev.react !== 'Martyr',
+        html: `<div class="fx-panel">
+            <span class="eyebrow">${ev.name === meName ? 'You react!' : esc(ev.name) + ' reacts!'}</span>
+            <div class="fx-cards"><div class="fx-dealt big" style="--d:100ms">${cardHTML(ev.card)}</div></div>
+            <h2 class="fx-title">${esc(ev.react)}</h2>
+            <p class="fx-sub">${esc(ev.text)}</p>
+          </div>`
+      };
+    case 'house':
+      return {
+        cls: 'fx-house', ms: 2500,
+        html: `<div class="fx-panel">
+            <span class="eyebrow">${esc(ev.title)}</span>
+            <div class="fx-flips">${flipHTML(ev, 350, 'big')}</div>
+            <h2 class="fx-title">${ev.pid === S.me ? 'You' : esc(ev.name)}: ${ev.house === 'Ronin' ? 'Ronin' : esc(ev.house) + ' ' + esc(ev.rank)}</h2>
+          </div>`
+      };
+    case 'peek':
+      return {
+        cls: 'fx-peek', ms: ev.cards && ev.cards.length ? 3000 : 2400,
+        html: `<div class="fx-panel">
+            <span class="eyebrow">🤫 ${esc(ev.title)}</span>
+            <div class="fx-flips">${ev.houses.map((h, i) => flipHTML(h, 300 + i * 250, 'big')).join('')}
+              ${(ev.cards || []).map((c) => `<div class="fx-dealt" style="--d:900ms">${cardHTML(c)}</div>`).join('')}</div>
+            ${ev.caption ? `<p class="fx-sub">${esc(ev.caption)}</p>` : ''}
+          </div>`
+      };
+    case 'notice':
+      return {
+        cls: 'fx-notice', ms: 2200,
+        html: `<div class="fx-panel">
+            ${ev.card ? `<div class="fx-cards"><div class="fx-dealt fizzled" style="--d:0ms">${cardHTML(ev.card)}</div></div>` : ''}
+            <h2 class="fx-title">${esc(ev.title)}</h2>
+            <p class="fx-sub">${esc(ev.text)}</p>
+          </div>`
+      };
+    case 'roundReveal': {
+      const n = ev.players.length;
+      const end = 600 + n * 450;
+      return {
+        cls: 'fx-round', ms: end + 3200,
+        html: `<div class="fx-panel wide">
+            <span class="eyebrow">Dawn breaks</span>
+            <h2 class="fx-title">House reveal</h2>
+            <div class="fx-flips grid">${ev.players.map((p, i) => `<div class="rr ${p.alive ? '' : 'dead'} ${ev.winner && p.house === ev.winner ? 'won' : ''}">
+                ${flipHTML(p, 600 + i * 450)}${p.mastermind ? '<span class="rr-badge">策 Mastermind</span>' : ''}
+                <span class="rr-name">${p.pid === S.me ? 'You' : esc(p.name)}${p.alive ? '' : ' ☠'}</span>
+              </div>`).join('')}</div>
+            <div class="fx-verdict" style="--d:${end + 300}ms">
+              <h3>${ev.winner ? `House ${esc(ev.winner)} wins` : 'No house wins'}</h3>
+              <p class="fx-sub">${esc(ev.reason)}</p>
+            </div>
+          </div>`
+      };
+    }
+  }
+  return null;
 }
