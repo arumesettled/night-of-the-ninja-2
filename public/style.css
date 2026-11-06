@@ -445,3 +445,15 @@ body.in-game .subtitle { display: none; }
   .main-area { display: flex; flex-direction: column; }
   .side { order: 2; }
 }
+
+/* Computer players */
+.solo-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid rgba(124, 140, 255, 0.18); }
+.solo-row h2 { margin: 0 0 0.25rem; }
+.solo-row p { margin: 0; color: var(--ink-soft); font-size: 0.9rem; }
+.solo-row .btn { flex: none; }
+.tag.cpu { background: rgba(34, 211, 238, 0.16); color: #67e8f9; }
+.bot-controls { display: flex; justify-content: center; margin-top: 0.75rem; }
+.remove-bot { flex: none; margin-left: auto; background: none; border: 0; color: var(--ink-faint); font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 0.2rem 0.4rem; border-radius: 6px; }
+.remove-bot:hover { color: #ff8a9c; background: rgba(226, 68, 92, 0.12); }
+@media (max-width: 640px) { .solo-row { flex-direction: column; align-items: flex-start; } }
+#playersPanel .tag.cpu { display: inline-block; }
