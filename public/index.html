@@ -79,6 +79,7 @@
           <span id="playerCount" class="pill">0 / 11</span>
         </div>
         <ul id="playerList" class="roster"></ul>
+        <p id="houseSet" class="house-set"></p>
 
         <div class="start-area">
           <button id="startBtn" class="btn btn-primary btn-lg" hidden>Begin the night</button>
@@ -91,19 +92,28 @@
     <main id="game" class="screen" hidden>
       <div class="top-bar">
         <div class="phase">
-          <span class="eyebrow">Current phase</span>
+          <span class="eyebrow" id="roundLabel">Round 1</span>
           <span id="phaseLabel">—</span>
         </div>
+        <div class="phase-track" id="phaseTrack"></div>
         <span id="roomDisplay" class="pill"></span>
       </div>
 
       <div class="main-area">
-        <aside class="card players-panel">
-          <h3 class="panel-title">Players</h3>
-          <div id="playersPanel"></div>
+        <aside class="side">
+          <div class="card players-panel">
+            <h3 class="panel-title" id="playersTitle">Players</h3>
+            <div id="playersPanel"></div>
+          </div>
+          <div class="card notes-card">
+            <h3 class="panel-title">Your secret notes</h3>
+            <div id="notes"><p class="muted small">What you learn tonight appears here. Only you can see it.</p></div>
+          </div>
         </aside>
 
         <section class="action-panel">
+          <div id="actionArea" class="card action-card" hidden></div>
+
           <div class="card private">
             <div class="house-col">
               <h3 class="panel-title">Your house</h3>
@@ -111,15 +121,18 @@
                 <span class="house-sigil">?</span>
                 <span class="house-name">Hidden</span>
               </div>
+              <div id="honorBox" class="honor-box"></div>
             </div>
             <div class="hand-col">
-              <h3 class="panel-title">Your cards</h3>
-              <p class="muted small" id="handHint">Tap a card to keep it.</p>
+              <h3 class="panel-title">Your ninja cards</h3>
               <div id="handDisplay" class="hand"></div>
             </div>
           </div>
 
-          <div id="actionArea"></div>
+          <div class="card played-card" id="playedBox" hidden>
+            <h3 class="panel-title">Revealed tonight</h3>
+            <div id="playedList" class="played-list"></div>
+          </div>
 
           <div class="card log-card">
             <h3 class="panel-title">Scroll of events</h3>
