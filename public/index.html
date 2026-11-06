@@ -2,51 +2,131 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Night of the Ninja — Online</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@400;500;600;700&family=Shippori+Mincho:wght@700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Night sky backdrop -->
+  <div class="sky" aria-hidden="true">
+    <div class="stars"></div>
+    <div class="moon"></div>
+    <svg class="skyline" viewBox="0 0 1440 260" preserveAspectRatio="xMidYMax slice">
+      <path class="hill far" d="M0 200 L180 120 L320 170 L520 80 L700 160 L880 100 L1080 170 L1260 110 L1440 160 L1440 260 L0 260Z"/>
+      <path class="hill near" d="M0 230 L240 180 L420 215 L640 170 L860 220 L1100 185 L1440 225 L1440 260 L0 260Z"/>
+      <!-- pagoda -->
+      <g class="pagoda" transform="translate(1120 92)">
+        <rect x="26" y="20" width="8" height="120"/>
+        <path d="M-6 40 L30 22 L66 40 L58 44 L30 32 L2 44Z"/>
+        <path d="M-2 70 L30 52 L62 70 L54 74 L30 62 L6 74Z"/>
+        <path d="M2 100 L30 82 L58 100 L50 104 L30 92 L10 104Z"/>
+        <rect x="14" y="104" width="32" height="40"/>
+        <rect x="29" y="0" width="2" height="24"/>
+      </g>
+    </svg>
+  </div>
+
   <div id="app">
-    <header>
+    <header class="hero">
+      <div class="kanji-mark" aria-hidden="true">忍</div>
       <h1>Night of the Ninja</h1>
-      <p class="subtitle">Ninja-fast social deduction — play with your team online</p>
+      <p class="subtitle">Lightning-fast social deduction. Trust no one after dark.</p>
     </header>
 
-    <div id="lobby" class="screen">
-      <div class="card">
-        <h2>Join or Create a Game</h2>
-        <input id="playerName" placeholder="Your name" maxlength="20">
-        <div class="row">
-          <button id="createBtn">Create Room</button>
-          <input id="roomCode" placeholder="Room code" maxlength="5" style="text-transform:uppercase">
-          <button id="joinBtn">Join Room</button>
-        </div>
-        <div id="lobbyInfo"></div>
-        <ul id="playerList"></ul>
-        <button id="startBtn" style="display:none">Start Game (Host)</button>
-      </div>
-    </div>
+    <!-- LOBBY -->
+    <main id="lobby" class="screen">
+      <section id="entryPanel" class="card entry">
+        <label class="field">
+          <span class="field-label">Your ninja name</span>
+          <input id="playerName" placeholder="e.g. Silent Fox" maxlength="20" autocomplete="off">
+        </label>
 
-    <div id="game" class="screen" style="display:none">
-      <div class="top-bar">
-        <span id="phaseLabel">Phase: —</span>
-        <span id="roomDisplay"></span>
-      </div>
-      <div class="main-area">
-        <div class="players-panel" id="playersPanel"></div>
-        <div class="action-panel">
-          <div id="privateInfo">
-            <h3>Your House</h3>
-            <div id="houseDisplay">—</div>
-            <h3>Your Cards</h3>
-            <div id="handDisplay"></div>
+        <div class="entry-split">
+          <div class="entry-option">
+            <h2>Host a game</h2>
+            <p>Start a new room and invite your team.</p>
+            <button id="createBtn" class="btn btn-primary">Create room</button>
           </div>
-          <div id="actionArea"></div>
-          <div id="log"></div>
+          <div class="divider"><span>or</span></div>
+          <div class="entry-option">
+            <h2>Join a game</h2>
+            <p>Enter the 5-letter code from your host.</p>
+            <div class="join-row">
+              <input id="roomCode" class="code-input" placeholder="ABCDE" maxlength="5" autocomplete="off">
+              <button id="joinBtn" class="btn btn-secondary">Join</button>
+            </div>
+          </div>
         </div>
+      </section>
+
+      <section id="waitingPanel" class="card waiting" hidden>
+        <div class="room-code-block">
+          <span class="eyebrow">Room code</span>
+          <button id="copyCode" class="room-code" title="Copy code"><span id="codeText">—</span><span class="copy-hint">Copy</span></button>
+          <p id="lobbyInfo" class="muted">Share this code with your team.</p>
+        </div>
+
+        <div class="roster-head">
+          <h2>Ninjas in the dojo</h2>
+          <span id="playerCount" class="pill">0 / 11</span>
+        </div>
+        <ul id="playerList" class="roster"></ul>
+
+        <div class="start-area">
+          <button id="startBtn" class="btn btn-primary btn-lg" hidden>Begin the night</button>
+          <p id="startHint" class="muted small"></p>
+        </div>
+      </section>
+    </main>
+
+    <!-- GAME -->
+    <main id="game" class="screen" hidden>
+      <div class="top-bar">
+        <div class="phase">
+          <span class="eyebrow">Current phase</span>
+          <span id="phaseLabel">—</span>
+        </div>
+        <span id="roomDisplay" class="pill"></span>
       </div>
-    </div>
+
+      <div class="main-area">
+        <aside class="card players-panel">
+          <h3 class="panel-title">Players</h3>
+          <div id="playersPanel"></div>
+        </aside>
+
+        <section class="action-panel">
+          <div class="card private">
+            <div class="house-col">
+              <h3 class="panel-title">Your house</h3>
+              <div id="houseDisplay" class="house-card empty">
+                <span class="house-sigil">?</span>
+                <span class="house-name">Hidden</span>
+              </div>
+            </div>
+            <div class="hand-col">
+              <h3 class="panel-title">Your cards</h3>
+              <p class="muted small" id="handHint">Tap a card to keep it.</p>
+              <div id="handDisplay" class="hand"></div>
+            </div>
+          </div>
+
+          <div id="actionArea"></div>
+
+          <div class="card log-card">
+            <h3 class="panel-title">Scroll of events</h3>
+            <div id="log"></div>
+          </div>
+        </section>
+      </div>
+    </main>
   </div>
+
+  <div id="toasts" aria-live="polite"></div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="game.js"></script>
 </body>
