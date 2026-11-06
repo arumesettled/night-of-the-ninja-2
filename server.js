@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -10,220 +11,663 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = new Map();
+const MIN_PLAYERS = 4;
+const MAX_PLAYERS = 11;
+const WIN_POINTS = 10;
 
-function generateRoomCode() {
-  return Math.random().toString(36).substring(2, 7).toUpperCase();
-}
+// ---------------------------------------------------------------------------
+// Cards
+// ---------------------------------------------------------------------------
+const PHASES = ['Spy', 'Mystic', 'Trickster', 'Blind Assassin', 'Shinobi'];
 
-// Card definitions
-const CARD_TYPES = {
-  SPY: 'Spy',
-  MYSTIC: 'Mystic',
-  BLIND_ASSASSIN: 'Blind Assassin',
-  SHINOBI: 'Shinobi',
-  SHAPESHIFTER: 'Shapeshifter',
-  JUDGE: 'Judge',
-  GRAVEDIGGER: 'Gravedigger',
-  SPIRIT_MERCHANT: 'Spirit Merchant',
-  THIEF: 'Thief',
-  TROUBLEMAKER: 'Troublemaker',
-  MIRROR_MONK: 'Mirror Monk',
-  MARTYR: 'Martyr',
-  MASTERMIND: 'Mastermind'
+const TRICKSTERS = [
+  { type: 'Shapeshifter', num: 1, text: 'Look at the HOUSE cards of two players. You may secretly swap them. They may not look at their new HOUSES.' },
+  { type: 'Grave Digger', num: 2, text: 'Look at two discarded NINJA cards and pick one. Play it immediately or keep it for later.' },
+  { type: 'Troublemaker', num: 3, text: "Look at another player's HOUSE card. You may reveal it." },
+  { type: 'Spirit Merchant', num: 4, text: "Look at another player's HONOR tokens or HOUSE card. You may swap one HONOR token with them." },
+  { type: 'Thief', num: 5, text: 'Reveal your HOUSE card. You may take one HONOR token from a player who has more than you.' },
+  { type: 'Judge', num: 6, text: 'Reveal your HOUSE card. Choose a player and KILL them. Mirror Monks and Martyrs do not work on the Judge.' }
+];
+
+const CLASS_TEXT = {
+  'Spy': "Look at another player's HOUSE card.",
+  'Mystic': 'Look at the HOUSE card and one NINJA card of another player.',
+  'Blind Assassin': 'Choose a player and KILL them.',
+  'Shinobi': 'Choose a player. Look at their HOUSE card. You may choose to KILL them.'
 };
 
 function createNinjaDeck() {
   const deck = [];
-  // Multiple copies of core cards (numbered 1-6)
-  for (let num = 1; num <= 6; num++) {
-    deck.push({ type: CARD_TYPES.SPY, number: num, phase: 'Spy' });
-    deck.push({ type: CARD_TYPES.MYSTIC, number: num, phase: 'Mystic' });
-    deck.push({ type: CARD_TYPES.BLIND_ASSASSIN, number: num, phase: 'Blind Assassin' });
-    deck.push({ type: CARD_TYPES.SHINOBI, number: num, phase: 'Shinobi' });
+  let id = 0;
+  for (const cls of ['Spy', 'Mystic', 'Blind Assassin', 'Shinobi']) {
+    for (let num = 1; num <= 6; num++) deck.push({ id: id++, type: cls, cls, num, text: CLASS_TEXT[cls] });
   }
-  // Special Tricksters
-  deck.push({ type: CARD_TYPES.SHAPESHIFTER, number: 1, phase: 'Trickster' });
-  deck.push({ type: CARD_TYPES.GRAVEDIGGER, number: 2, phase: 'Trickster' });
-  deck.push({ type: CARD_TYPES.TROUBLEMAKER, number: 3, phase: 'Trickster' });
-  deck.push({ type: CARD_TYPES.SPIRIT_MERCHANT, number: 4, phase: 'Trickster' });
-  deck.push({ type: CARD_TYPES.THIEF, number: 5, phase: 'Trickster' });
-  deck.push({ type: CARD_TYPES.JUDGE, number: 6, phase: 'Trickster' });
-  // Reactions / special
-  deck.push({ type: CARD_TYPES.MIRROR_MONK, number: 0, phase: 'React' });
-  deck.push({ type: CARD_TYPES.MARTYR, number: 0, phase: 'React' });
-  deck.push({ type: CARD_TYPES.MASTERMIND, number: 0, phase: 'Reveal' });
-  return shuffle(deck);
+  for (const t of TRICKSTERS) deck.push({ id: id++, type: t.type, cls: 'Trickster', num: t.num, text: t.text });
+  deck.push({ id: id++, type: 'Mirror Monk', cls: 'React', num: 0, text: 'React: reveal if a Shinobi or Blind Assassin chooses to KILL you. KILL them instead.' });
+  deck.push({ id: id++, type: 'Martyr', cls: 'React', num: 0, text: 'React: reveal if a Shinobi or Blind Assassin chooses to KILL you. Gain an HONOR token.' });
+  deck.push({ id: id++, type: 'Mastermind', cls: 'Reveal', num: 0, text: 'If you are still alive during the Reveal, your HOUSE wins the round. (If you are the Ronin, no HOUSE wins.)' });
+  return shuffle(deck); // 33 cards
 }
 
-function shuffle(array) {
-  for (let i = array.length - 1; i > 0; i--) {
+function cardName(c) { return c.num ? `${c.type} ${c.num}` : c.type; }
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
+    [a[i], a[j]] = [a[j], a[i]];
   }
-  return array;
+  return a;
 }
 
-function createHouseCards(playerCount) {
+function createHouseCards(n) {
   const houses = [];
-  const half = Math.floor(playerCount / 2);
-  for (let i = 1; i <= half; i++) {
-    houses.push({ house: 'Crane', rank: i });
-    houses.push({ house: 'Lotus', rank: i });
+  for (let r = 1; r <= Math.floor(n / 2); r++) {
+    houses.push({ house: 'Crane', rank: r });
+    houses.push({ house: 'Lotus', rank: r });
   }
-  if (playerCount % 2 === 1) {
-    houses.push({ house: 'Ronin', rank: 0 });
-  }
+  if (n % 2 === 1) houses.push({ house: 'Ronin', rank: 0 });
   return shuffle(houses);
 }
 
+function createTokenPool() {
+  const pool = [];
+  for (let i = 0; i < 35; i++) pool.push([2, 3, 4][i % 3]);
+  return shuffle(pool);
+}
+
+function houseLabel(h) { return h.house === 'Ronin' ? 'Ronin' : `${h.house} ${h.rank}`; }
+function generateRoomCode() {
+  let c;
+  do { c = Math.random().toString(36).substring(2, 7).toUpperCase(); } while (c.length < 5 || rooms.has(c));
+  return c;
+}
+
+// ---------------------------------------------------------------------------
+// Room helpers
+// ---------------------------------------------------------------------------
+function P(room, pid) { return room.players.find(p => p.pid === pid); }
+function nameOf(room, pid) { const p = P(room, pid); return p ? p.name : '?'; }
+function points(p) { return p.tokens.reduce((a, b) => a + b, 0); }
+
+function log(room, msg) {
+  if (!room.game) return;
+  room.game.log.push(msg);
+}
+function note(room, pid, msg) {
+  if (!room.game) return;
+  (room.game.notes[pid] = room.game.notes[pid] || []).push(msg);
+}
+function drawToken(room) {
+  if (room.tokenPool.length === 0) room.tokenPool = createTokenPool();
+  return room.tokenPool.pop();
+}
+
+// Ask a player something and wait for the answer. Disconnected players get the default.
+function ask(room, pid, prompt) {
+  const p = P(room, pid);
+  const def = prompt.default !== undefined ? prompt.default : (prompt.options && prompt.options.length ? prompt.options[prompt.options.length - 1].value : null);
+  if (!p || !p.connected) return Promise.resolve(def);
+  return new Promise((resolve) => {
+    const id = crypto.randomBytes(6).toString('hex');
+    room.pending[pid] = { id, prompt: { ...prompt, id }, resolve, def };
+    sync(room);
+  });
+}
+
+function answer(room, pid, promptId, value) {
+  const pend = room.pending[pid];
+  if (!pend || pend.id !== promptId) return;
+  const opts = pend.prompt.options || [];
+  if (opts.length && !opts.some(o => o.value === value)) return; // reject invalid choices
+  delete room.pending[pid];
+  pend.resolve(value);
+}
+
+function cancelPending(room, pid) {
+  const pend = room.pending[pid];
+  if (pend) { delete room.pending[pid]; pend.resolve(pend.def); }
+}
+
+function setWaiting(room, text) { if (room.game) room.game.waiting = text; sync(room); }
+
+// Player options for target prompts
+function playerOptions(room, filter) {
+  return room.players.filter(filter).map(p => ({ value: p.pid, label: p.name + (room.game.dead[p.pid] ? ' (dead)' : '') }));
+}
+const others = (room, me) => (p) => p.pid !== me;
+const otherAlive = (room, me) => (p) => p.pid !== me && !room.game.dead[p.pid];
+
+// ---------------------------------------------------------------------------
+// Personalised state sent to each player
+// ---------------------------------------------------------------------------
+function stateFor(room, pid) {
+  const g = room.game;
+  const me = P(room, pid);
+  const s = {
+    code: room.code,
+    me: pid,
+    hostPid: room.hostPid,
+    stage: room.state,
+    round: room.round,
+    players: room.players.map(p => ({
+      pid: p.pid,
+      name: p.name,
+      connected: p.connected,
+      alive: g ? !g.dead[p.pid] : true,
+      tokenCount: p.tokens.length,
+      points: room.state === 'gameOver' || p.pid === pid ? points(p) : null,
+      house: g && (g.revealed[p.pid] || g.stage === 'reveal') ? houseLabel(g.houses[p.pid]) : null,
+      houseName: g && (g.revealed[p.pid] || g.stage === 'reveal') ? g.houses[p.pid].house : null
+    })),
+    myTokens: me ? me.tokens.slice() : [],
+    prompt: room.pending[pid] ? room.pending[pid].prompt : null
+  };
+  if (g) {
+    const known = g.revealed[pid] || g.stage === 'reveal' ? g.houses[pid] : g.knownHouse[pid];
+    s.phase = g.phaseLabel;
+    s.myHouse = known ? { house: known.house, rank: known.rank, label: houseLabel(known) } : null;
+    s.myCards = (g.hands[pid] || []).map(c => ({ ...c }));
+    s.draftHand = g.draftView[pid] || null;
+    s.notes = g.notes[pid] || [];
+    s.log = g.log.slice(-60);
+    s.played = g.played.map(x => ({ name: nameOf(room, x.pid), card: x.card, status: x.status }));
+    s.waiting = g.waiting;
+    s.result = g.result || null;
+  }
+  if (room.state === 'gameOver') s.final = room.final;
+  return s;
+}
+
+function sync(room) {
+  for (const p of room.players) {
+    if (p.connected && p.sid) io.to(p.sid).emit('state', stateFor(room, p.pid));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round flow
+// ---------------------------------------------------------------------------
+async function playRound(room) {
+  const players = room.players;
+  const n = players.length;
+  const houseCards = createHouseCards(n);
+  const deck = createNinjaDeck();
+  room.round += 1;
+
+  const g = room.game = {
+    stage: 'draft',
+    phaseLabel: 'Draft',
+    houses: {}, knownHouse: {}, hands: {}, draftView: {},
+    discard: [], played: [], dead: {}, revealed: {}, notes: {}, log: [],
+    waiting: '', result: null
+  };
+  players.forEach((p, i) => {
+    g.houses[p.pid] = houseCards[i];
+    g.knownHouse[p.pid] = { ...houseCards[i] };
+    g.hands[p.pid] = [];
+  });
+  log(room, `Round ${room.round} begins. Everyone has a secret house.`);
+
+  // ---- Draft: keep 1 of 3, pass 2 left, keep 1 of 2, discard 1 ----
+  const packs = {};
+  players.forEach(p => { packs[p.pid] = deck.splice(0, 3); });
+
+  const pickFrom = async (pickLabel) => {
+    const picks = await Promise.all(players.map(async (p) => {
+      g.draftView[p.pid] = packs[p.pid];
+      const v = await ask(room, p.pid, {
+        kind: 'draft',
+        title: pickLabel,
+        text: 'Choose a card to keep.',
+        options: packs[p.pid].map(c => ({ value: c.id, label: cardName(c) })),
+        default: packs[p.pid][0].id
+      });
+      const idx = Math.max(0, packs[p.pid].findIndex(c => c.id === v));
+      const kept = packs[p.pid].splice(idx, 1)[0];
+      g.hands[p.pid].push(kept);
+      delete g.draftView[p.pid];
+      sync(room);
+      return kept;
+    }));
+    return picks;
+  };
+
+  setWaiting(room, 'Everyone is choosing a card to keep…');
+  await pickFrom('Draft: first pick');
+  // pass the remaining two cards to the left (next player in seat order)
+  const passed = {};
+  players.forEach((p, i) => { passed[players[(i + 1) % n].pid] = packs[p.pid]; });
+  players.forEach(p => { packs[p.pid] = passed[p.pid]; });
+  log(room, 'Everyone passes their other two cards to the left.');
+  setWaiting(room, 'Everyone is choosing their second card…');
+  await pickFrom('Draft: second pick (the other card is discarded)');
+  players.forEach(p => { g.discard.push(...packs[p.pid]); packs[p.pid] = []; });
+  log(room, 'Draft complete. Each ninja holds two cards. The night begins…');
+
+  // ---- The Night ----
+  g.stage = 'night';
+  for (const cls of PHASES) {
+    g.phaseLabel = `Night: ${cls}`;
+    log(room, `— ${cls} phase —`);
+    const eligible = players.filter(p => !g.dead[p.pid] && g.hands[p.pid].some(c => c.cls === cls));
+    setWaiting(room, `Ninjas may reveal a ${cls} card…`);
+
+    const plays = [];
+    await Promise.all(eligible.map(async (p) => {
+      const matching = g.hands[p.pid].filter(c => c.cls === cls);
+      const options = matching.map(c => ({ value: String(c.id), label: `Play ${cardName(c)}` }));
+      if (matching.length > 1) options.push({ value: 'all', label: 'Play both' });
+      options.push({ value: 'pass', label: 'Hold it back (it will be lost)' });
+      const v = await ask(room, p.pid, {
+        kind: 'declare',
+        title: `${cls} phase`,
+        text: `You hold ${matching.map(cardName).join(' and ')}. Play now? If you don't, you can't play it later this round.`,
+        options,
+        default: 'pass'
+      });
+      const chosen = v === 'all' ? matching : matching.filter(c => String(c.id) === v);
+      for (const c of matching) g.hands[p.pid] = g.hands[p.pid].filter(h => h.id !== c.id);
+      for (const c of chosen) plays.push({ pid: p.pid, card: c });
+    }));
+
+    if (plays.length === 0) { log(room, `No one plays a ${cls}.`); sync(room); continue; }
+    plays.sort((a, b) => a.card.num - b.card.num);
+    for (const x of plays) {
+      x.status = 'waiting';
+      g.played.push(x);
+      log(room, `${nameOf(room, x.pid)} reveals ${cardName(x.card)}.`);
+    }
+    sync(room);
+
+    for (const x of plays) {
+      if (g.dead[x.pid]) { x.status = 'fizzled'; log(room, `${nameOf(room, x.pid)} is dead, so ${cardName(x.card)} does nothing.`); sync(room); continue; }
+      x.status = 'active';
+      setWaiting(room, `${nameOf(room, x.pid)} is using ${cardName(x.card)}…`);
+      await resolveCard(room, x.pid, x.card);
+      x.status = 'done';
+      sync(room);
+    }
+  }
+
+  // ---- House reveal ----
+  g.stage = 'reveal';
+  g.phaseLabel = 'House reveal';
+  g.waiting = '';
+  scoreRound(room);
+}
+
+async function resolveCard(room, pid, card) {
+  const g = room.game;
+  const me = nameOf(room, pid);
+  switch (card.type) {
+    case 'Spy': {
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      log(room, `${me} spies on ${nameOf(room, t)}'s house.`);
+      note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}.`);
+      break;
+    }
+    case 'Mystic': {
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      log(room, `${me} reads ${nameOf(room, t)}'s house and a ninja card.`);
+      const held = g.hands[t];
+      const seen = held.length ? held[Math.floor(Math.random() * held.length)] : null;
+      note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}, and holds ${seen ? cardName(seen) : 'no ninja cards'}.`);
+      break;
+    }
+    case 'Shapeshifter': {
+      const a = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose the first player.', options: playerOptions(room, others(room, pid)) });
+      const b = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose the second player.', options: playerOptions(room, p => p.pid !== pid && p.pid !== a) });
+      const swap = await ask(room, pid, {
+        kind: 'choice', title: cardName(card),
+        text: `${nameOf(room, a)} is ${houseLabel(g.houses[a])}. ${nameOf(room, b)} is ${houseLabel(g.houses[b])}. Swap their houses? They won't know.`,
+        options: [{ value: 'swap', label: 'Swap them' }, { value: 'keep', label: 'Leave them' }], default: 'keep'
+      });
+      note(room, pid, `${cardName(card)}: ${nameOf(room, a)} was ${houseLabel(g.houses[a])}, ${nameOf(room, b)} was ${houseLabel(g.houses[b])}.${swap === 'swap' ? ' You swapped them.' : ''}`);
+      if (swap === 'swap') { const tmp = g.houses[a]; g.houses[a] = g.houses[b]; g.houses[b] = tmp; }
+      log(room, `${me} looks at ${nameOf(room, a)} and ${nameOf(room, b)}'s houses…`);
+      break;
+    }
+    case 'Grave Digger': {
+      if (g.discard.length === 0) { log(room, `${me} digs, but the discard pile is empty.`); break; }
+      const offered = shuffle(g.discard.slice()).slice(0, 2);
+      const pick = await ask(room, pid, { kind: 'choice', title: cardName(card), text: 'Pick one discarded card.', options: offered.map(c => ({ value: String(c.id), label: cardName(c) })), default: String(offered[0].id) });
+      const dug = offered.find(c => String(c.id) === pick) || offered[0];
+      g.discard = g.discard.filter(c => c.id !== dug.id);
+      const usable = !['React', 'Reveal'].includes(dug.cls);
+      const how = usable ? await ask(room, pid, {
+        kind: 'choice', title: cardName(card), text: `You dug up ${cardName(dug)}. Use it now, or keep it for its own phase?`,
+        options: [{ value: 'now', label: 'Use it now' }, { value: 'keep', label: 'Keep it for later' }], default: 'keep'
+      }) : 'keep';
+      if (how === 'now') {
+        log(room, `${me} digs up ${cardName(dug)} and uses it immediately!`);
+        g.played.push({ pid, card: dug, status: 'active' });
+        sync(room);
+        await resolveCard(room, pid, dug);
+        g.played[g.played.length - 1].status = 'done';
+      } else {
+        g.hands[pid].push(dug);
+        log(room, `${me} digs up a card and keeps it for later.`);
+        note(room, pid, `${cardName(card)}: you kept ${cardName(dug)}.`);
+      }
+      break;
+    }
+    case 'Troublemaker': {
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      const rev = await ask(room, pid, {
+        kind: 'choice', title: cardName(card), text: `${nameOf(room, t)} is ${houseLabel(g.houses[t])}. Reveal it to everyone?`,
+        options: [{ value: 'reveal', label: 'Reveal it' }, { value: 'hide', label: 'Keep it secret' }], default: 'hide'
+      });
+      note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}.`);
+      if (rev === 'reveal') { g.revealed[t] = true; log(room, `${me} exposes ${nameOf(room, t)}: ${houseLabel(g.houses[t])}!`); }
+      else log(room, `${me} looks at ${nameOf(room, t)}'s house and keeps quiet.`);
+      break;
+    }
+    case 'Spirit Merchant': {
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: card.text, options: playerOptions(room, others(room, pid)) });
+      const tp = P(room, t), mp = P(room, pid);
+      const look = await ask(room, pid, {
+        kind: 'choice', title: cardName(card), text: `Look at ${tp.name}'s honor tokens or house card?`,
+        options: [{ value: 'tokens', label: 'Honor tokens' }, { value: 'house', label: 'House card' }], default: 'house'
+      });
+      if (look === 'house') note(room, pid, `${cardName(card)}: ${tp.name} is ${houseLabel(g.houses[t])}.`);
+      else note(room, pid, `${cardName(card)}: ${tp.name}'s tokens are ${tp.tokens.length ? tp.tokens.join(', ') : 'none'}.`);
+      log(room, `${me} bargains with ${tp.name}…`);
+      if (tp.tokens.length && mp.tokens.length) {
+        const mine = await ask(room, pid, {
+          kind: 'choice', title: cardName(card), text: 'Swap one honor token? Choose one of yours to give.',
+          options: [...mp.tokens.map((v, i) => ({ value: `m${i}`, label: `Give my ${v}` })), { value: 'none', label: "Don't swap" }], default: 'none'
+        });
+        if (mine !== 'none') {
+          let ti = Math.floor(Math.random() * tp.tokens.length);
+          if (look === 'tokens') {
+            const theirs = await ask(room, pid, {
+              kind: 'choice', title: cardName(card), text: `Which of ${tp.name}'s tokens do you take?`,
+              options: tp.tokens.map((v, i) => ({ value: `t${i}`, label: `Take their ${v}` })), default: 't0'
+            });
+            ti = Number(theirs.slice(1));
+          }
+          const mi = Number(mine.slice(1));
+          const give = mp.tokens[mi], take = tp.tokens[ti];
+          mp.tokens[mi] = take; tp.tokens[ti] = give;
+          note(room, pid, `You swapped your ${give} for ${tp.name}'s ${take}.`);
+          note(room, t, `${me}'s Spirit Merchant swapped one of your honor tokens.`);
+          log(room, `${me} swaps an honor token with ${tp.name}.`);
+        }
+      }
+      break;
+    }
+    case 'Thief': {
+      g.revealed[pid] = true;
+      log(room, `${me} reveals their house: ${houseLabel(g.houses[pid])}.`);
+      const mp = P(room, pid);
+      const richer = room.players.filter(p => p.pid !== pid && p.tokens.length > mp.tokens.length);
+      if (!richer.length) { log(room, `No one has more honor than ${me}, so there is nothing to steal.`); break; }
+      const t = await ask(room, pid, {
+        kind: 'target', title: cardName(card), text: 'Take one honor token from a player with more tokens than you?',
+        options: [...richer.map(p => ({ value: p.pid, label: `${p.name} (${p.tokens.length} tokens)` })), { value: 'none', label: "Don't steal" }], default: 'none'
+      });
+      if (t !== 'none') {
+        const tp = P(room, t);
+        const v = tp.tokens.splice(Math.floor(Math.random() * tp.tokens.length), 1)[0];
+        mp.tokens.push(v);
+        note(room, pid, `${cardName(card)}: you stole a ${v} from ${tp.name}.`);
+        note(room, t, `${me} stole one of your honor tokens (a ${v}).`);
+        log(room, `${me} steals an honor token from ${tp.name}.`);
+      }
+      break;
+    }
+    case 'Judge': {
+      g.revealed[pid] = true;
+      log(room, `${me} reveals their house: ${houseLabel(g.houses[pid])}.`);
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL. No reaction can stop the Judge.', options: playerOptions(room, otherAlive(room, pid)) });
+      if (t) await attemptKill(room, pid, t, card, false);
+      break;
+    }
+    case 'Blind Assassin': {
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL.', options: playerOptions(room, otherAlive(room, pid)) });
+      if (t) await attemptKill(room, pid, t, card, true);
+      break;
+    }
+    case 'Shinobi': {
+      const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player and look at their house.', options: playerOptions(room, otherAlive(room, pid)) });
+      if (!t) break;
+      const k = await ask(room, pid, {
+        kind: 'choice', title: cardName(card), text: `${nameOf(room, t)} is ${houseLabel(g.houses[t])}. Kill them?`,
+        options: [{ value: 'kill', label: 'Kill them' }, { value: 'spare', label: 'Spare them' }], default: 'spare'
+      });
+      note(room, pid, `${cardName(card)}: ${nameOf(room, t)} is ${houseLabel(g.houses[t])}.`);
+      if (k === 'kill') await attemptKill(room, pid, t, card, true);
+      else log(room, `${me} looks at ${nameOf(room, t)}'s house… and spares them.`);
+      break;
+    }
+  }
+  sync(room);
+}
+
+async function attemptKill(room, killer, target, card, reactable) {
+  const g = room.game;
+  const kn = nameOf(room, killer), tn = nameOf(room, target);
+  if (g.dead[target]) return;
+  if (reactable) {
+    const reacts = g.hands[target].filter(c => c.cls === 'React');
+    if (reacts.length) {
+      const v = await ask(room, target, {
+        kind: 'react', title: 'You are being attacked!', text: `${kn}'s ${cardName(card)} is trying to kill you.`,
+        options: [...reacts.map(c => ({ value: c.type, label: `Reveal ${c.type}` })), { value: 'none', label: 'Accept your fate' }], default: 'none'
+      });
+      if (v === 'Mirror Monk') {
+        g.hands[target] = g.hands[target].filter(c => c.type !== 'Mirror Monk');
+        g.played.push({ pid: target, card: reacts.find(c => c.type === 'Mirror Monk'), status: 'done' });
+        log(room, `${tn} reveals a Mirror Monk! The attack turns back on ${kn}.`);
+        kill(room, killer, `reflected by ${tn}'s Mirror Monk`);
+        return;
+      }
+      if (v === 'Martyr') {
+        g.hands[target] = g.hands[target].filter(c => c.type !== 'Martyr');
+        g.played.push({ pid: target, card: reacts.find(c => c.type === 'Martyr'), status: 'done' });
+        const tok = drawToken(room);
+        P(room, target).tokens.push(tok);
+        note(room, target, `Martyr: you gained an honor token worth ${tok}.`);
+        log(room, `${tn} reveals a Martyr and gains an honor token.`);
+      }
+    }
+  }
+  kill(room, target, `killed by ${kn}'s ${cardName(card)}`);
+}
+
+function kill(room, pid, how) {
+  const g = room.game;
+  g.dead[pid] = true;
+  g.hands[pid] = g.hands[pid].filter(c => false);
+  cancelPending(room, pid);
+  log(room, `☠ ${nameOf(room, pid)} is ${how}.`);
+  sync(room);
+}
+
+function scoreRound(room) {
+  const g = room.game;
+  const alive = room.players.filter(p => !g.dead[p.pid]);
+  const mastermindHolder = alive.find(p => g.hands[p.pid].some(c => c.type === 'Mastermind'));
+  let winner = null;
+  let reason = '';
+  let fullTie = false;
+
+  if (mastermindHolder) {
+    const h = g.houses[mastermindHolder.pid];
+    g.played.push({ pid: mastermindHolder.pid, card: g.hands[mastermindHolder.pid].find(c => c.type === 'Mastermind'), status: 'done' });
+    if (h.house === 'Ronin') { winner = null; reason = `${mastermindHolder.name} survived with the Mastermind, but is the Ronin. No house wins.`; }
+    else { winner = h.house; reason = `${mastermindHolder.name} survived with the Mastermind. House ${h.house} wins!`; }
+  } else {
+    const ranks = (house) => alive.map(p => g.houses[p.pid]).filter(h => h.house === house).map(h => h.rank).sort((a, b) => a - b);
+    const c = ranks('Crane'), l = ranks('Lotus');
+    if (!c.length && !l.length) fullTie = true;
+    else {
+      for (let i = 0; ; i++) {
+        if (i >= c.length && i >= l.length) { fullTie = true; break; }
+        if (i >= c.length) { winner = 'Lotus'; break; }
+        if (i >= l.length) { winner = 'Crane'; break; }
+        if (c[i] < l[i]) { winner = 'Crane'; break; }
+        if (l[i] < c[i]) { winner = 'Lotus'; break; }
+      }
+    }
+    if (fullTie) reason = 'Neither house could be separated. Every survivor gains an honor token.';
+    else {
+      const best = alive.map(p => g.houses[p.pid]).filter(h => h.house === winner).sort((a, b) => a.rank - b.rank)[0];
+      reason = `House ${winner} wins with ${winner} ${best.rank} surviving!`;
+    }
+  }
+  log(room, `— House reveal — ${reason}`);
+
+  const gains = [];
+  const give = (p) => { const v = drawToken(room); p.tokens.push(v); gains.push(p.pid); note(room, p.pid, `You gained an honor token worth ${v}.`); };
+  if (fullTie) alive.forEach(give);
+  else {
+    room.players.forEach(p => {
+      const h = g.houses[p.pid];
+      if (winner && h.house === winner) give(p);
+      else if (h.house === 'Ronin' && !g.dead[p.pid]) give(p);
+    });
+  }
+  g.result = { winner, reason, fullTie, gainers: gains.map(pid => nameOf(room, pid)) };
+
+  const top = Math.max(...room.players.map(points));
+  if (top >= WIN_POINTS) {
+    room.state = 'gameOver';
+    const champs = room.players.filter(p => points(p) === top).map(p => p.name);
+    room.final = {
+      champions: champs,
+      scores: room.players.map(p => ({ name: p.name, points: points(p), tokens: p.tokens.slice() })).sort((a, b) => b.points - a.points)
+    };
+    log(room, `🏆 ${champs.join(' & ')} ${champs.length > 1 ? 'share' : 'claims'} victory with ${top} honor!`);
+  } else {
+    room.state = 'roundEnd';
+  }
+  sync(room);
+}
+
+async function runRound(room) {
+  try {
+    room.state = 'playing';
+    room.pending = {};
+    await playRound(room);
+  } catch (e) {
+    console.error('Round error', e);
+    room.state = 'roundEnd';
+    if (room.game) { room.game.waiting = ''; log(room, 'Something went wrong this round. The host can start the next one.'); }
+    sync(room);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sockets
+// ---------------------------------------------------------------------------
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
+  let bound = null; // { room, pid }
+
+  const bind = (room, pid) => {
+    bound = { room, pid };
+    const p = P(room, pid);
+    p.sid = socket.id;
+    p.connected = true;
+    socket.join(room.code);
+    socket.emit('joined', { code: room.code, pid });
+    sync(room);
+  };
 
   socket.on('createRoom', (playerName) => {
+    const name = String(playerName || '').trim().slice(0, 20);
+    if (!name) return socket.emit('gameError', 'Pick a ninja name first');
     const code = generateRoomCode();
-    const room = {
-      code,
-      players: [{ id: socket.id, name: playerName, honor: 0, alive: true }],
-      host: socket.id,
-      state: 'lobby',
-      game: null
-    };
+    const pid = crypto.randomBytes(8).toString('hex');
+    const room = { code, hostPid: pid, players: [], state: 'lobby', round: 0, game: null, pending: {}, tokenPool: createTokenPool() };
+    room.players.push({ pid, sid: socket.id, name, connected: true, tokens: [] });
     rooms.set(code, room);
-    socket.join(code);
-    socket.emit('roomCreated', { code, players: room.players });
-    io.to(code).emit('updatePlayers', room.players);
+    bind(room, pid);
   });
 
   socket.on('joinRoom', ({ code, playerName }) => {
-    const room = rooms.get(code);
-    if (!room) return socket.emit('error', 'Room not found');
-    if (room.players.length >= 11) return socket.emit('error', 'Room full');
-    if (room.state !== 'lobby') return socket.emit('error', 'Game already started');
+    const room = rooms.get(String(code || '').toUpperCase());
+    const name = String(playerName || '').trim().slice(0, 20);
+    if (!room) return socket.emit('gameError', 'Room not found');
+    if (!name) return socket.emit('gameError', 'Pick a ninja name first');
+    // Rejoin a game in progress by name if that player dropped off
+    const existing = room.players.find(p => p.name.toLowerCase() === name.toLowerCase());
+    if (existing && !existing.connected) return bind(room, existing.pid);
+    if (existing) return socket.emit('gameError', 'Someone in this room already has that name');
+    if (room.state !== 'lobby') return socket.emit('gameError', 'This game has already started');
+    if (room.players.length >= MAX_PLAYERS) return socket.emit('gameError', 'Room is full (11 players)');
+    const pid = crypto.randomBytes(8).toString('hex');
+    room.players.push({ pid, sid: socket.id, name, connected: true, tokens: [] });
+    bind(room, pid);
+  });
 
-    room.players.push({ id: socket.id, name: playerName, honor: 0, alive: true });
-    socket.join(code);
-    socket.emit('joinedRoom', { code, players: room.players });
-    io.to(code).emit('updatePlayers', room.players);
+  socket.on('rejoin', ({ code, pid }) => {
+    const room = rooms.get(String(code || ''));
+    if (!room || !P(room, pid)) return socket.emit('rejoinFailed');
+    bind(room, pid);
   });
 
   socket.on('startGame', () => {
-    const room = getRoomBySocket(socket);
-    if (!room || room.host !== socket.id) return;
-    if (room.players.length < 4) return socket.emit('error', 'Need at least 4 players');
-
-    startRound(room);
+    if (!bound) return;
+    const { room, pid } = bound;
+    if (room.hostPid !== pid) return;
+    if (room.state === 'playing') return;
+    if (room.state === 'lobby' && room.players.length < MIN_PLAYERS) return socket.emit('gameError', `Need at least ${MIN_PLAYERS} players`);
+    if (room.state === 'gameOver') { room.players.forEach(p => { p.tokens = []; }); room.round = 0; room.tokenPool = createTokenPool(); room.final = null; }
+    runRound(room);
   });
 
-  socket.on('draftChoice', ({ cardIndex }) => {
-    // Draft logic will be handled here
-    const room = getRoomBySocket(socket);
-    if (!room || !room.game) return;
-    handleDraftChoice(room, socket.id, cardIndex);
+  socket.on('answer', ({ promptId, value }) => {
+    if (!bound) return;
+    answer(bound.room, bound.pid, promptId, value);
   });
 
-  socket.on('playCard', (data) => {
-    const room = getRoomBySocket(socket);
-    if (!room || !room.game) return;
-    handlePlayCard(room, socket.id, data);
+  socket.on('leaveRoom', () => {
+    if (!bound) return;
+    const { room, pid } = bound;
+    if (room.state === 'lobby') removePlayer(room, pid);
+    else markDisconnected(room, pid);
+    socket.leave(room.code);
+    bound = null;
   });
 
   socket.on('disconnect', () => {
-    const room = getRoomBySocket(socket);
-    if (room) {
-      room.players = room.players.filter(p => p.id !== socket.id);
-      if (room.players.length === 0) {
-        rooms.delete(room.code);
-      } else {
-        io.to(room.code).emit('updatePlayers', room.players);
-      }
-    }
+    if (!bound) return;
+    const { room, pid } = bound;
+    const p = P(room, pid);
+    if (!p || p.sid !== socket.id) return; // already rebound on another socket
+    if (room.state === 'lobby') removePlayer(room, pid);
+    else markDisconnected(room, pid);
   });
 });
 
-function getRoomBySocket(socket) {
-  for (const room of rooms.values()) {
-    if (room.players.some(p => p.id === socket.id)) return room;
+function removePlayer(room, pid) {
+  room.players = room.players.filter(p => p.pid !== pid);
+  if (!room.players.length) return rooms.delete(room.code);
+  if (room.hostPid === pid) room.hostPid = room.players[0].pid;
+  sync(room);
+}
+
+function markDisconnected(room, pid) {
+  const p = P(room, pid);
+  if (!p) return;
+  p.connected = false;
+  if (room.hostPid === pid) {
+    const next = room.players.find(x => x.connected);
+    if (next) room.hostPid = next.pid;
   }
-  return null;
-}
-
-function startRound(room) {
-  const houseCards = createHouseCards(room.players.length);
-  const ninjaDeck = createNinjaDeck();
-
-  room.game = {
-    phase: 'draft',
-    draftStep: 0,
-    houses: {},
-    hands: {},
-    played: {},
-    discard: [],
-    honorTokens: shuffle(Array(35).fill(0).map((_, i) => [2, 3, 4][i % 3]))
-  };
-
-  room.players.forEach((p, i) => {
-    room.game.houses[p.id] = houseCards[i];
-    // Deal 3 cards for draft
-    room.game.hands[p.id] = ninjaDeck.splice(0, 3);
-    p.alive = true;
-  });
-
-  room.state = 'playing';
-  io.to(room.code).emit('gameStarted', {
-    players: room.players.map(p => ({ id: p.id, name: p.name, honor: p.honor })),
-    yourHouse: null // will be sent privately
-  });
-
-  // Send private house and hand
-  room.players.forEach(p => {
-    io.to(p.id).emit('privateInfo', {
-      house: room.game.houses[p.id],
-      hand: room.game.hands[p.id]
-    });
-  });
-
-  io.to(room.code).emit('phaseUpdate', { phase: 'Draft', message: 'Choose 1 card to keep, then pass the rest' });
-}
-
-function handleDraftChoice(room, playerId, cardIndex) {
-  const game = room.game;
-  if (!game || game.phase !== 'draft') return;
-  const hand = game.hands[playerId];
-  if (!hand || !hand[cardIndex]) return;
-
-  // Simple: keep the chosen card, move others toward discard for prototype
-  const kept = hand.splice(cardIndex, 1)[0];
-  game.discard.push(...hand);
-  game.hands[playerId] = [kept]; // temporarily store kept
-
-  io.to(playerId).emit('draftAck', { kept });
-
-  // Check if all have chosen (simplified for now)
-  const allChosen = room.players.every(p => game.hands[p.id] && game.hands[p.id].length === 1);
-  if (allChosen) {
-    // Move to night
-    game.phase = 'night';
-    game.currentPhase = 'Spy';
-    io.to(room.code).emit('phaseUpdate', { 
-      phase: 'Night — Spy', 
-      message: 'Spy phase: play a Spy card if you have one, or pass.' 
-    });
-    // Send updated hands
-    room.players.forEach(p => {
-      io.to(p.id).emit('privateInfo', {
-        house: game.houses[p.id],
-        hand: game.hands[p.id]
-      });
-    });
+  // Give a dropped player 45s to come back before their pending choice is made for them
+  setTimeout(() => { if (!p.connected) cancelPending(room, pid); }, 45000);
+  if (!room.players.some(x => x.connected)) {
+    setTimeout(() => { if (!room.players.some(x => x.connected)) rooms.delete(room.code); }, 10 * 60 * 1000);
   }
-}
-
-function handlePlayCard(room, playerId, data) {
-  // Placeholder for phase resolution
-  io.to(room.code).emit('cardPlayed', { playerId, ...data });
+  sync(room);
 }
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Night of the Ninja server running on port ${PORT}`);
 });
+
+module.exports = { createNinjaDeck, createHouseCards };
