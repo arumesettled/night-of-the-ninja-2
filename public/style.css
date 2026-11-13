@@ -564,3 +564,13 @@ body.shake #app { animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) 0.45s both
   .fx-slash, .fx-blood { display: none; }
   body.shake #app { animation: none; }
 }
+
+/* New game + bot stepper */
+.bot-controls { align-items: center; gap: 0.8rem; }
+.bot-label { color: var(--ink-soft); font-size: 0.9rem; font-weight: 600; }
+.stepper { display: flex; align-items: center; gap: 0.5rem; }
+.stepper .btn { width: 40px; height: 40px; padding: 0; font-size: 1.2rem; line-height: 1; }
+.stepper .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.bot-count { min-width: 2ch; text-align: center; font-family: 'Cinzel', serif; font-weight: 800; font-size: 1.4rem; }
+.btn-sm { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+.top-bar #newGameBtn { flex: none; }
