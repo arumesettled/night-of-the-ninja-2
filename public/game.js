@@ -109,6 +109,23 @@ $('soloBtn').onclick = () => {
 };
 
 $('addBotBtn').onclick = () => socket.emit('addBot');
+$('removeBotBtn').onclick = () => {
+  const bots = S ? S.players.filter((p) => p.bot) : [];
+  if (bots.length) socket.emit('removeBot', bots[bots.length - 1].pid);
+};
+
+// New game: back to the setup screen. Two clicks so it can't happen by accident.
+let newGameArmed = null;
+function armNewGame(btn) {
+  if (newGameArmed === btn) { clearTimeout(btn._t); newGameArmed = null; socket.emit('newGame'); return; }
+  if (newGameArmed) { newGameArmed.textContent = newGameArmed.dataset.label; clearTimeout(newGameArmed._t); }
+  newGameArmed = btn;
+  btn.dataset.label = btn.dataset.label || btn.textContent;
+  btn.textContent = S && S.stage === 'playing' ? 'End this game? Click again' : 'Click again to confirm';
+  btn._t = setTimeout(() => { btn.textContent = btn.dataset.label; newGameArmed = null; }, 3500);
+}
+$('newGameBtn').onclick = (e) => armNewGame(e.currentTarget);
+socket.on('fxClear', () => { fxQueue.length = 0; fxRoot.innerHTML = ''; fxBusy = false; });
 
 joinBtn.onclick = () => {
   const name = playerNameInput.value.trim();
@@ -136,7 +153,20 @@ startBtn.onclick = () => socket.emit('startGame');
 socket.on('connect', () => {
   if (session) socket.emit('rejoin', session);
 });
-socket.on('rejoinFailed', () => { session = null; sessionStorage.removeItem('notn-session'); });
+socket.on('rejoinFailed', () => {
+  session = null;
+  sessionStorage.removeItem('notn-session');
+  if (!S) return;
+  // The room is gone (e.g. the server restarted): go back to the start screen instead of showing dead buttons
+  S = null;
+  fxQueue.length = 0; fxRoot.innerHTML = ''; fxBusy = false;
+  lobby.hidden = false; game.hidden = true;
+  document.body.classList.remove('in-game');
+  $('heroPhoto').hidden = false;
+  entryPanel.hidden = false;
+  waitingPanel.hidden = true;
+  toast('That room has closed. Start a new game or join another room.');
+});
 socket.on('joined', ({ code, pid }) => {
   session = { code, pid };
   sessionStorage.setItem('notn-session', JSON.stringify(session));
@@ -174,7 +204,11 @@ function renderLobby() {
       <span class="avatar" style="background:${avatarColor(p.pid)}">${initials(p.name)}</span>
       <span class="pname">${esc(p.name)}</span>${tagsFor(p)}${isHost && p.bot ? `<button class="remove-bot" data-bot="${esc(p.pid)}" title="Remove ${esc(p.name)}">×</button>` : ''}</li>`).join('');
   playerList.querySelectorAll('[data-bot]').forEach((b) => { b.onclick = () => socket.emit('removeBot', b.dataset.bot); });
-  $('botControls').hidden = !isHost || S.players.length >= MAX_PLAYERS;
+  const botCount = S.players.filter((p) => p.bot).length;
+  $('botControls').hidden = !isHost;
+  $('botCount').textContent = botCount;
+  $('removeBotBtn').disabled = botCount === 0;
+  $('addBotBtn').disabled = S.players.length >= MAX_PLAYERS;
   const humans = S.players.filter((p) => !p.bot).length;
   $('lobbyInfo').textContent = humans === 1 && S.players.length > 1 ? 'Playing against the computer. Friends can still join with this code.' : 'Share this code with your team.';
   playerCount.textContent = `${S.players.length} / ${MAX_PLAYERS}`;
@@ -197,6 +231,9 @@ function phaseKey() {
 
 function renderGame() {
   $('roomDisplay').textContent = `Room ${S.code}`;
+  const ngb = $('newGameBtn');
+  ngb.hidden = S.hostPid !== S.me;
+  if (newGameArmed !== ngb) ngb.textContent = 'New game';
   $('roundLabel').textContent = `Round ${S.round || 1}`;
   $('phaseLabel').textContent = S.stage === 'gameOver' ? 'Game over' : (S.phase || '—');
   const pk = phaseKey();
@@ -268,7 +305,7 @@ function renderAction() {
     area.innerHTML = `<span class="eyebrow">Victory</span>
       <h2 class="result-title">🏆 ${esc(S.final.champions.join(' & '))}</h2>
       <div class="scores">${S.final.scores.map((s) => `<div><span>${esc(s.name)}</span><strong>${s.points}</strong></div>`).join('')}</div>
-      ${isHost ? '<button class="btn btn-primary" id="nextBtn">Play again</button>' : '<p class="muted small">Waiting for the host to start a new game…</p>'}`;
+      ${isHost ? '<div class="options"><button class="btn btn-primary" id="nextBtn">Play again</button><button class="btn btn-secondary" id="setupBtn">New game: change players</button></div>' : '<p class="muted small">Waiting for the host to start a new game…</p>'}`;
     bindNext();
     return;
   }
@@ -281,7 +318,7 @@ function renderAction() {
       <h2 class="result-title">${S.result.winner ? `House ${esc(S.result.winner)} wins` : 'No house wins'}</h2>
       <p>${esc(S.result.reason)}</p>
       <p class="muted small">${S.result.gainers.length ? 'Honor tokens to: ' + esc(S.result.gainers.join(', ')) : 'No honor tokens this round.'}${won ? ' (including you!)' : ''}</p>
-      ${isHost ? '<button class="btn btn-primary" id="nextBtn">Start next round</button>' : '<p class="muted small">Waiting for the host to start the next round…</p>'}`;
+      ${isHost ? '<div class="options"><button class="btn btn-primary" id="nextBtn">Start next round</button><button class="btn btn-secondary" id="setupBtn">New game: change players</button></div>' : '<p class="muted small">Waiting for the host to start the next round…</p>'}`;
     bindNext();
     return;
   }
@@ -348,6 +385,8 @@ function renderAction() {
 function bindNext() {
   const b = $('nextBtn');
   if (b) b.onclick = () => { b.disabled = true; socket.emit('startGame'); };
+  const sb = $('setupBtn');
+  if (sb) sb.onclick = () => { sb.disabled = true; socket.emit('newGame'); };
 }
 
 
