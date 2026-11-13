@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@400;500;600;700&family=Shippori+Mincho:wght@700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <!-- Night sky backdrop -->
@@ -39,7 +39,7 @@
     <!-- LOBBY -->
     <main id="lobby" class="screen">
       <figure id="heroPhoto" class="hero-photo">
-        <img src="image-1.jpg" alt="Six ninjas in black gi sitting on a log bench beneath a tall pine tree">
+        <img src="image-1.jpg" alt="Seven ninjas in black gi sitting on a log bench beneath a tall pine tree">
         <figcaption>The dojo, assembled.</figcaption>
       </figure>
 
@@ -89,7 +89,12 @@
         <ul id="playerList" class="roster"></ul>
         <p id="houseSet" class="house-set"></p>
         <div class="bot-controls" id="botControls" hidden>
-          <button id="addBotBtn" class="btn btn-secondary">+ Add computer ninja</button>
+          <span class="bot-label">Computer ninjas</span>
+          <div class="stepper">
+            <button id="removeBotBtn" class="btn btn-secondary" aria-label="One fewer computer ninja">−</button>
+            <span id="botCount" class="bot-count">0</span>
+            <button id="addBotBtn" class="btn btn-secondary" aria-label="One more computer ninja">+</button>
+          </div>
         </div>
 
         <div class="start-area">
@@ -108,6 +113,7 @@
         </div>
         <div class="phase-track" id="phaseTrack"></div>
         <span id="roomDisplay" class="pill"></span>
+        <button id="newGameBtn" class="btn btn-secondary btn-sm" hidden>New game</button>
       </div>
 
       <div class="main-area">
@@ -158,6 +164,6 @@
   <div id="toasts" aria-live="polite"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="game.js"></script>
+  <script src="game.js?v=4"></script>
 </body>
 </html>
