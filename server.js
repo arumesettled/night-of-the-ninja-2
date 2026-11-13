@@ -109,7 +109,9 @@ function ask(room, pid, prompt) {
   const { ai, ...pub } = prompt; // `ai` hints are for computer players only, never sent to clients
   if (p && p.bot) {
     const delay = prompt.kind === 'draft' ? 500 + Math.random() * 1000 : 900 + Math.random() * 1300;
+    const gen = room.gen;
     return new Promise((resolve) => setTimeout(() => {
+      if (room.gen !== gen) return;
       let v;
       try { v = botDecide(room, pid, prompt); } catch (e) { console.error('Bot error', e); v = def; }
       const opts = prompt.options || [];
@@ -242,12 +244,14 @@ function cancelPending(room, pid) {
 
 // Shared animations: every player sees these, and the game waits for them to play
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// Waits that belong to a game: if the host abandons that game, it simply never continues
+const pause = (room, ms) => { const gen = room.gen; return new Promise(r => setTimeout(() => { if (room.gen === gen) r(); }, ms)); };
 function fx(room, ev) { io.to(room.code).emit('fx', ev); }
 function isHuman(room, pid) { const p = P(room, pid); return !!(p && !p.bot && p.connected && p.sid); }
 async function fxPrivate(room, pid, ev, ms) {
   if (!isHuman(room, pid)) return;
   io.to(P(room, pid).sid).emit('fx', ev);
-  if (ms) await sleep(ms);
+  if (ms) await pause(room, ms);
 }
 const houseView = (room, pid) => ({ pid, name: nameOf(room, pid), house: room.game.houses[pid].house, rank: room.game.houses[pid].rank });
 
@@ -399,7 +403,7 @@ async function playRound(room) {
 
     plays.sort((a, b) => a.card.num - b.card.num);
     fx(room, { type: 'phase', phase: cls, plays: plays.map(x => ({ pid: x.pid, name: nameOf(room, x.pid), card: x.card })) });
-    await sleep(plays.length ? 1900 + 500 * plays.length : 1300);
+    await pause(room, plays.length ? 1900 + 500 * plays.length : 1300);
     if (plays.length === 0) { log(room, `No one plays a ${cls}.`); sync(room); continue; }
     for (const x of plays) {
       x.status = 'waiting';
@@ -513,7 +517,7 @@ async function resolveCard(room, pid, card) {
         log(room, `${me} exposes ${nameOf(room, t)}: ${houseLabel(g.houses[t])}!`);
         sync(room);
         fx(room, { type: 'house', title: `${me}'s Troublemaker exposes`, ...houseView(room, t) });
-        await sleep(2800);
+        await pause(room, 2800);
       }
       else log(room, `${me} looks at ${nameOf(room, t)}'s house and keeps quiet.`);
       break;
@@ -565,7 +569,7 @@ async function resolveCard(room, pid, card) {
       log(room, `${me} reveals their house: ${houseLabel(g.houses[pid])}.`);
       sync(room);
       fx(room, { type: 'house', title: `${me} reveals their house`, ...houseView(room, pid) });
-      await sleep(2800);
+      await pause(room, 2800);
       const mp = P(room, pid);
       const richer = room.players.filter(p => p.pid !== pid && p.tokens.length > mp.tokens.length);
       if (!richer.length) { log(room, `No one has more honor than ${me}, so there is nothing to steal.`); break; }
@@ -589,7 +593,7 @@ async function resolveCard(room, pid, card) {
       log(room, `${me} reveals their house: ${houseLabel(g.houses[pid])}.`);
       sync(room);
       fx(room, { type: 'house', title: `${me} reveals their house`, ...houseView(room, pid) });
-      await sleep(2800);
+      await pause(room, 2800);
       const t = await ask(room, pid, { kind: 'target', title: cardName(card), text: 'Choose a player to KILL. No reaction can stop the Judge.', options: playerOptions(room, otherAlive(room, pid)), ai: { goal: 'kill' } });
       if (t) await attemptKill(room, pid, t, card, false);
       break;
@@ -636,7 +640,7 @@ async function attemptKill(room, killer, target, card, reactable) {
         log(room, `${tn} reveals a Mirror Monk! The attack turns back on ${kn}.`);
         sync(room);
         fx(room, { type: 'react', react: 'Mirror Monk', card: reacts.find(c => c.type === 'Mirror Monk'), name: tn, text: `The blade turns back on ${kn}!` });
-        await sleep(2400);
+        await pause(room, 2400);
         await kill(room, killer, `reflected by ${tn}'s Mirror Monk`, { by: tn, card: reacts.find(c => c.type === 'Mirror Monk'), reflected: true });
         return;
       }
@@ -649,7 +653,7 @@ async function attemptKill(room, killer, target, card, reactable) {
         log(room, `${tn} reveals a Martyr and gains an honor token.`);
         sync(room);
         fx(room, { type: 'react', react: 'Martyr', card: reacts.find(c => c.type === 'Martyr'), name: tn, text: `${tn} dies with honor and gains a token.` });
-        await sleep(2400);
+        await pause(room, 2400);
       }
     }
   }
@@ -664,7 +668,7 @@ async function kill(room, pid, how, info = {}) {
   log(room, `☠ ${nameOf(room, pid)} is ${how}.`);
   sync(room);
   fx(room, { type: 'kill', pid, name: nameOf(room, pid), by: info.by || '', card: info.card || null, reflected: !!info.reflected });
-  await sleep(3200);
+  await pause(room, 3200);
 }
 
 async function scoreRound(room) {
@@ -704,7 +708,7 @@ async function scoreRound(room) {
     type: 'roundReveal', winner, reason,
     players: room.players.map(p => ({ ...houseView(room, p.pid), alive: !g.dead[p.pid], mastermind: !!(mastermindHolder && mastermindHolder.pid === p.pid) }))
   });
-  await sleep(2600 + 450 * room.players.length + 1800);
+  await pause(room, 2600 + 450 * room.players.length + 1800);
 
   const gains = [];
   const give = (p) => { const v = drawToken(room); p.tokens.push(v); gains.push(p.pid); note(room, p.pid, `You gained an honor token worth ${v}.`); };
@@ -787,7 +791,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('addBot', () => {
-    if (!bound) return;
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
     const { room, pid } = bound;
     if (room.hostPid !== pid || room.state !== 'lobby') return;
     if (room.players.length >= MAX_PLAYERS) return socket.emit('gameError', 'Room is full (11 players)');
@@ -796,7 +800,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('removeBot', (botPid) => {
-    if (!bound) return;
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
     const { room, pid } = bound;
     if (room.hostPid !== pid || room.state !== 'lobby') return;
     const b = P(room, botPid);
@@ -828,7 +832,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('startGame', () => {
-    if (!bound) return;
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
     const { room, pid } = bound;
     if (room.hostPid !== pid) return;
     if (room.state === 'playing') return;
@@ -837,13 +841,31 @@ io.on('connection', (socket) => {
     runRound(room);
   });
 
+  socket.on('newGame', () => {
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
+    const { room, pid } = bound;
+    if (room.hostPid !== pid || room.state === 'lobby') return;
+    room.gen = (room.gen || 0) + 1; // stops the old game where it is
+    room.pending = {};
+    room.game = null;
+    room.state = 'lobby';
+    room.round = 0;
+    room.final = null;
+    room.tokenPool = createTokenPool();
+    room.players = room.players.filter(p => p.bot || p.connected); // drop humans who left
+    room.players.forEach(p => { p.tokens = []; });
+    if (!P(room, room.hostPid)) room.hostPid = pid;
+    io.to(room.code).emit('fxClear');
+    sync(room);
+  });
+
   socket.on('answer', ({ promptId, value }) => {
-    if (!bound) return;
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
     answer(bound.room, bound.pid, promptId, value);
   });
 
   socket.on('leaveRoom', () => {
-    if (!bound) return;
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
     const { room, pid } = bound;
     if (room.state === 'lobby') removePlayer(room, pid);
     else markDisconnected(room, pid);
@@ -852,7 +874,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (!bound) return;
+    if (!bound) return socket.emit('rejoinFailed'); // server no longer knows this player's room
     const { room, pid } = bound;
     const p = P(room, pid);
     if (!p || p.sid !== socket.id) return; // already rebound on another socket
